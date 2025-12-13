@@ -327,7 +327,12 @@ public partial class MainWindow : Window
 
     private string? FindPackage()
     {
-        // Look for package in the same directory as the installer
+        // First, try to extract embedded package from assembly resources
+        var embeddedPackage = ExtractEmbeddedPackage();
+        if (embeddedPackage != null)
+            return embeddedPackage;
+        
+        // Fall back to looking for package in the same directory as the installer
         var installerDir = AppContext.BaseDirectory;
         
         // Look for Package subdirectory first
@@ -351,6 +356,57 @@ public partial class MainWindow : Window
         }
         
         return null;
+    }
+
+    /// <summary>
+    /// Extracts the embedded nupkg from assembly resources to a temp file
+    /// </summary>
+    private string? ExtractEmbeddedPackage()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var resourceNames = assembly.GetManifestResourceNames();
+        
+        // Find the embedded nupkg resource
+        var nupkgResource = resourceNames.FirstOrDefault(r => r.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase));
+        
+        if (nupkgResource == null)
+        {
+            Debug.WriteLine("No embedded nupkg found. Available resources: " + string.Join(", ", resourceNames));
+            return null;
+        }
+        
+        Debug.WriteLine($"Found embedded package: {nupkgResource}");
+        
+        try
+        {
+            using var stream = assembly.GetManifestResourceStream(nupkgResource);
+            if (stream == null)
+                return null;
+            
+            // Extract to temp directory
+            var tempDir = Path.Combine(Path.GetTempPath(), "CanopySetup");
+            Directory.CreateDirectory(tempDir);
+            
+            // Use a consistent filename
+            var tempPath = Path.Combine(tempDir, "Canopy.nupkg");
+            
+            // Delete existing if present
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { }
+            }
+            
+            using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write);
+            stream.CopyTo(fileStream);
+            
+            Debug.WriteLine($"Extracted package to: {tempPath}");
+            return tempPath;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to extract embedded package: {ex.Message}");
+            return null;
+        }
     }
 
     private async Task UpdateProgress(int percentage, string status)

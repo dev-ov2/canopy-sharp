@@ -1,5 +1,5 @@
 # Canopy Windows Build and Package Script
-# Creates a GUI installer with options
+# Creates a single-file GUI installer with embedded application package
 
 param(
     [string]$Configuration = "Release",
@@ -89,7 +89,7 @@ if (-not $SkipBuild) {
     Write-Host "Application build completed!" -ForegroundColor Green
 }
 
-# Step 4: Ensure icons exist
+# Step 4: Ensure icons exist in publish directory
 $icoSource = Join-Path $RootDir "src\Canopy.Windows\Assets\canopy.ico"
 $pngSource = Join-Path $RootDir "src\Canopy.Windows\Assets\canopy.png"
 $publishAssetsDir = Join-Path $PublishDir "Assets"
@@ -134,21 +134,29 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Package created!" -ForegroundColor Green
 
-# Step 6: Build the custom Setup installer
+# Step 6: Build the custom Setup installer with embedded package
 Write-Host ""
-Write-Host "Building custom Setup installer..." -ForegroundColor Yellow
+Write-Host "Building Setup installer (with embedded package)..." -ForegroundColor Yellow
 
-# Copy the nupkg to the Setup project's Package folder
+# Copy the nupkg to the Setup project's Package folder (will be embedded as resource)
 $setupPackageDir = Join-Path $RootDir "src\Canopy.Setup\Package"
 New-Item -ItemType Directory -Path $setupPackageDir -Force | Out-Null
 
-$nupkgFile = Get-ChildItem $PackageDir -Filter "*.nupkg" | Select-Object -First 1
-if ($nupkgFile) {
-    Copy-Item $nupkgFile.FullName -Destination $setupPackageDir -Force
-    Write-Host "Copied package to Setup project" -ForegroundColor Gray
+$nupkgFile = Get-ChildItem $PackageDir -Filter "*-full.nupkg" | Select-Object -First 1
+if (-not $nupkgFile) {
+    $nupkgFile = Get-ChildItem $PackageDir -Filter "*.nupkg" | Select-Object -First 1
 }
 
-# Build and publish the Setup project
+if ($nupkgFile) {
+    Copy-Item $nupkgFile.FullName -Destination $setupPackageDir -Force
+    Write-Host "  Embedded package: $($nupkgFile.Name) ($([math]::Round($nupkgFile.Length / 1MB, 2)) MB)" -ForegroundColor Gray
+}
+else {
+    Write-Error "No nupkg file found to embed"
+    exit 1
+}
+
+# Build and publish the Setup project as single file
 $setupPublishDir = Join-Path $DistDir "setup-publish"
 $setupArgs = @(
     "publish",
@@ -158,6 +166,7 @@ $setupArgs = @(
     "-o", $setupPublishDir,
     "--self-contained", "true",
     "-p:PublishSingleFile=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
     "-p:Version=$Version",
     "-p:DebugType=none",
     "-p:DebugSymbols=false"
@@ -166,36 +175,32 @@ $setupArgs = @(
 & dotnet @setupArgs
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Custom installer build failed. Falling back to Velopack installer." -ForegroundColor Yellow
-    
-    # Copy Velopack's setup to releases
-    Copy-Item "$PackageDir\*" -Destination $ReleasesDir -Recurse -Force
-}
-else {
-    Write-Host "Custom installer built successfully!" -ForegroundColor Green
-    
-    # Copy the setup exe to releases
-    $setupExe = Get-ChildItem $setupPublishDir -Filter "*.exe" | Select-Object -First 1
-    if ($setupExe) {
-        $finalName = "CanopySetup-$Version.exe"
-        Copy-Item $setupExe.FullName -Destination (Join-Path $ReleasesDir $finalName) -Force
-    }
-    
-    # Also copy the nupkg (for the installer to use)
-    Copy-Item $nupkgFile.FullName -Destination $ReleasesDir -Force
-    
-    # Copy portable zip from Velopack output
-    $portableZip = Get-ChildItem $PackageDir -Filter "*Portable.zip" | Select-Object -First 1
-    if ($portableZip) {
-        Copy-Item $portableZip.FullName -Destination $ReleasesDir -Force
-    }
-    
-    # Clean up temp directories
-    Remove-Item $setupPackageDir -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item $setupPublishDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Error "Setup installer build failed"
+    exit $LASTEXITCODE
 }
 
-# Clean up
+Write-Host "Setup installer built successfully!" -ForegroundColor Green
+
+# Copy the setup exe to releases (this is the only file users need!)
+$setupExe = Get-ChildItem $setupPublishDir -Filter "*.exe" | Select-Object -First 1
+if ($setupExe) {
+    $finalName = "CanopySetup-$Version.exe"
+    Copy-Item $setupExe.FullName -Destination (Join-Path $ReleasesDir $finalName) -Force
+    
+    $finalSize = [math]::Round((Get-Item (Join-Path $ReleasesDir $finalName)).Length / 1MB, 2)
+    Write-Host "  Created: $finalName ($finalSize MB)" -ForegroundColor Green
+}
+
+# Also copy portable zip from Velopack output (for users who prefer portable)
+$portableZip = Get-ChildItem $PackageDir -Filter "*Portable.zip" | Select-Object -First 1
+if ($portableZip) {
+    Copy-Item $portableZip.FullName -Destination $ReleasesDir -Force
+    Write-Host "  Created: $($portableZip.Name)" -ForegroundColor Green
+}
+
+# Clean up temp directories
+Remove-Item $setupPackageDir -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $setupPublishDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $PackageDir -Recurse -Force -ErrorAction SilentlyContinue
 
 # Summary
@@ -210,9 +215,13 @@ Get-ChildItem $ReleasesDir -File | ForEach-Object {
     Write-Host "  - $($_.Name) ($size MB)" -ForegroundColor Gray
 }
 Write-Host ""
-Write-Host "Installation:" -ForegroundColor Cyan
-Write-Host "  Run CanopySetup-$Version.exe for GUI installation with options:" -ForegroundColor White
-Write-Host "    - Start with Windows" -ForegroundColor Gray
-Write-Host "    - Create desktop shortcut" -ForegroundColor Gray
-Write-Host "    - Create Start Menu shortcut" -ForegroundColor Gray
-Write-Host "    - Launch after installation" -ForegroundColor Gray
+Write-Host "Distribution:" -ForegroundColor Cyan
+Write-Host "  The CanopySetup-$Version.exe is a single-file installer." -ForegroundColor White
+Write-Host "  Users download ONE file - no additional packages needed!" -ForegroundColor White
+Write-Host ""
+Write-Host "  Features:" -ForegroundColor White
+Write-Host "    - GUI wizard with Next/Back/Cancel" -ForegroundColor Gray
+Write-Host "    - Start with Windows option" -ForegroundColor Gray
+Write-Host "    - Desktop shortcut option" -ForegroundColor Gray
+Write-Host "    - Start Menu shortcut option" -ForegroundColor Gray
+Write-Host "    - Launch after install option" -ForegroundColor Gray

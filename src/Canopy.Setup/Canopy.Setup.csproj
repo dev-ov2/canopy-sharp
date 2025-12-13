@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -20,14 +20,10 @@
     <Description>Canopy Installer</Description>
   </PropertyGroup>
 
-  <!-- Embed the application package -->
+  <!-- Embed the application package as a resource -->
   <ItemGroup>
-    <Content Include="Package\*.nupkg" CopyToOutputDirectory="PreserveNewest" Condition="Exists('Package\')" />
-  </ItemGroup>
-  <ItemGroup>
-    <EmbeddedResource Include="Assets\Images\Sprout.png">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </EmbeddedResource>
+    <EmbeddedResource Include="Package\*.nupkg" Condition="Exists('Package\')" />
+    <EmbeddedResource Include="Assets\Images\Sprout.png" />
   </ItemGroup>
 
 </Project>

@@ -57,11 +57,13 @@ jobs:
             Write-Host "  $($_.FullName)$size"
           }
 
-      - name: Upload installer artifacts
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: Canopy-Windows-x64
-          path: dist/releases/*
+          path: |
+            dist/releases/CanopySetup-*.exe
+            dist/releases/*Portable.zip
           if-no-files-found: error
 
   build-linux:
@@ -121,7 +123,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Canopy-Linux-x64
-          path: dist/releases/*
+          path: dist/releases/*Portable.zip
           if-no-files-found: error
 
   release:
@@ -179,19 +181,23 @@ jobs:
             
             | Platform | File | Description |
             |----------|------|-------------|
-            | Windows x64 | `CanopySetup-${{ steps.version.outputs.VERSION }}.exe` | GUI Installer |
-            | Windows x64 | `Canopy-win-Portable.zip` | Portable version |
-            | Linux x64 | `Canopy-linux-Portable.zip` | Portable version |
+            | **Windows** | `CanopySetup-${{ steps.version.outputs.VERSION }}.exe` | **Single-file GUI Installer** (recommended) |
+            | Windows | `Canopy-win-Portable.zip` | Portable version (no install) |
+            | Linux | `Canopy-linux-Portable.zip` | Portable version |
             
             ### Installation
             
-            **Windows:**
+            **Windows (Recommended):**
             1. Download `CanopySetup-${{ steps.version.outputs.VERSION }}.exe`
-            2. Run the installer
-            3. Follow the installation wizard with options for:
-               - Start with Windows
-               - Desktop shortcut
-               - Start Menu shortcut
+            2. Run the installer - that's it! No other downloads needed.
+            3. Follow the wizard with options for:
+               - ✅ Start with Windows
+               - ✅ Desktop shortcut
+               - ✅ Start Menu shortcut
+            
+            **Windows (Portable):**
+            1. Download and extract `Canopy-win-Portable.zip`
+            2. Run `Canopy.Windows.exe`
             
             **Linux:**
             ```bash
