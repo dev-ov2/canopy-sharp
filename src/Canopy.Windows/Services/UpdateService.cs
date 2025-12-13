@@ -342,6 +342,23 @@ public class UpdateService : IDisposable
         Log($"Downloading to: {tempPath}");
         Log($"Download URL: {updateInfo.DownloadUrl}");
 
+        // Delete existing file if present
+        if (File.Exists(tempPath))
+        {
+            try
+            {
+                File.Delete(tempPath);
+                Log("Deleted existing temp file");
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to delete existing temp file: {ex.Message}");
+                // Generate a unique filename instead
+                tempPath = Path.Combine(Path.GetTempPath(), $"CanopyUpdate_{DateTime.Now:yyyyMMddHHmmss}.exe");
+                Log($"Using alternative path: {tempPath}");
+            }
+        }
+
         using var response = await _httpClient.GetAsync(updateInfo.DownloadUrl, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
 
@@ -350,42 +367,74 @@ public class UpdateService : IDisposable
         
         var bytesRead = 0L;
 
-        await using var contentStream = await response.Content.ReadAsStreamAsync();
-        await using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None);
-
-        var buffer = new byte[8192];
-        int read;
-        var lastLoggedProgress = -1;
-
-        while ((read = await contentStream.ReadAsync(buffer)) > 0)
+        // Download to file - explicitly manage stream lifetimes
+        using (var contentStream = await response.Content.ReadAsStreamAsync())
+        using (var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, FileOptions.WriteThrough))
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, read));
-            bytesRead += read;
+            var buffer = new byte[8192];
+            int read;
+            var lastLoggedProgress = -1;
 
-            if (totalBytes > 0)
+            while ((read = await contentStream.ReadAsync(buffer)) > 0)
             {
-                var progress = (int)(bytesRead * 100 / totalBytes);
-                if (progress != lastLoggedProgress && progress % 10 == 0)
+                await fileStream.WriteAsync(buffer.AsMemory(0, read));
+                bytesRead += read;
+
+                if (totalBytes > 0)
                 {
-                    Log($"Download progress: {progress}% ({bytesRead}/{totalBytes} bytes)");
-                    lastLoggedProgress = progress;
+                    var progress = (int)(bytesRead * 100 / totalBytes);
+                    if (progress != lastLoggedProgress && progress % 10 == 0)
+                    {
+                        Log($"Download progress: {progress}% ({bytesRead}/{totalBytes} bytes)");
+                        lastLoggedProgress = progress;
+                    }
+                    DownloadProgress?.Invoke(this, progress);
                 }
-                DownloadProgress?.Invoke(this, progress);
             }
+
+            // Explicitly flush and close
+            await fileStream.FlushAsync();
         }
+        // Streams are now closed
 
         Log($"Download complete. Total bytes: {bytesRead}");
+        
+        // Verify file exists and has content
+        var fileInfo = new FileInfo(tempPath);
+        if (!fileInfo.Exists || fileInfo.Length == 0)
+        {
+            Log($"ERROR: Downloaded file is missing or empty. Exists={fileInfo.Exists}, Length={fileInfo.Length}");
+            throw new IOException("Downloaded file is missing or empty");
+        }
+        Log($"Verified file: {fileInfo.Length} bytes");
+
         UpdateDownloaded?.Invoke(this, EventArgs.Empty);
 
-        Log($"Launching installer: {tempPath}");
-        // Launch installer and exit
+        // Use cmd.exe to launch the installer after a delay, allowing this app to exit first
+        // This ensures the current app is fully closed before the installer runs
+        var batchContent = $@"@echo off
+timeout /t 2 /nobreak >nul
+start """" ""{tempPath}""
+del ""%~f0""
+";
+        var batchPath = Path.Combine(Path.GetTempPath(), "canopy_update_launcher.bat");
+        File.WriteAllText(batchPath, batchContent);
+        
+        Log($"Created launcher batch file: {batchPath}");
+        Log($"Launching installer via batch file...");
+        
         Process.Start(new ProcessStartInfo
         {
-            FileName = tempPath,
-            UseShellExecute = true
+            FileName = "cmd.exe",
+            Arguments = $"/c \"{batchPath}\"",
+            WindowStyle = ProcessWindowStyle.Hidden,
+            CreateNoWindow = true,
+            UseShellExecute = false
         });
 
         Log("Exiting application for update...");
+        
+        // Exit the app - the batch file will launch the installer after we're gone
         Application.Current.Exit();
     }
 
