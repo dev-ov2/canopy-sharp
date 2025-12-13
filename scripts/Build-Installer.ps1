@@ -198,6 +198,19 @@ if ($portableZip) {
     Write-Host "  Created: $($portableZip.Name)" -ForegroundColor Green
 }
 
+# Copy Velopack files needed for auto-updates (nupkg and RELEASES)
+$fullNupkg = Get-ChildItem $PackageDir -Filter "*-full.nupkg" | Select-Object -First 1
+if ($fullNupkg) {
+    Copy-Item $fullNupkg.FullName -Destination $ReleasesDir -Force
+    Write-Host "  Created: $($fullNupkg.Name) (for auto-updates)" -ForegroundColor Green
+}
+
+$releasesFile = Join-Path $PackageDir "RELEASES"
+if (Test-Path $releasesFile) {
+    Copy-Item $releasesFile -Destination $ReleasesDir -Force
+    Write-Host "  Created: RELEASES (for auto-updates)" -ForegroundColor Green
+}
+
 # Clean up temp directories
 Remove-Item $setupPackageDir -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $setupPublishDir -Recurse -Force -ErrorAction SilentlyContinue

@@ -150,44 +150,88 @@ public partial class App : Application
         // Subscribe to auto-update notifications
         var updateService = Services.GetRequiredService<UpdateService>();
         updateService.UpdateAvailable += OnUpdateAvailable;
+        updateService.UpdateError += OnUpdateError;
+        
+        Log($"App startup complete. AutoUpdate={Services.GetRequiredService<ISettingsService>().Settings.AutoUpdate}");
+    }
+
+    private void OnUpdateError(object? sender, string errorMessage)
+    {
+        Log($"Update error received: {errorMessage}");
     }
 
     private void OnUpdateAvailable(object? sender, Services.UpdateInfo updateInfo)
     {
+        Log($"OnUpdateAvailable fired: Version={updateInfo.Version}, IsVelopack={updateInfo.IsVelopackUpdate}");
+        
         DispatcherQueue.TryEnqueue(async () =>
         {
-            var notificationService = Services.GetRequiredService<INotificationService>();
-            var settings = Services.GetRequiredService<ISettingsService>().Settings;
-
-            if (settings.AutoUpdate)
+            try
             {
-                // Auto-update enabled: download silently and notify when ready
-                await notificationService.ShowAsync(
-                    "Update Available",
-                    $"Canopy v{updateInfo.Version} is downloading...");
+                var notificationService = Services.GetRequiredService<INotificationService>();
+                var settings = Services.GetRequiredService<ISettingsService>().Settings;
 
-                try
+                Log($"AutoUpdate setting: {settings.AutoUpdate}");
+
+                if (settings.AutoUpdate)
                 {
-                    var updateService = Services.GetRequiredService<UpdateService>();
-                    await updateService.DownloadAndInstallAsync(updateInfo);
-                    // App will restart automatically after download completes
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Auto-update failed: {ex.Message}");
+                    // Auto-update enabled: download silently and notify when ready
+                    Log("Auto-update enabled, starting download...");
                     await notificationService.ShowAsync(
-                        "Update Failed",
-                        "Please update manually from Settings.");
+                        "Update Available",
+                        $"Canopy v{updateInfo.Version} is downloading...");
+
+                    try
+                    {
+                        var updateService = Services.GetRequiredService<UpdateService>();
+                        await updateService.DownloadAndInstallAsync(updateInfo);
+                        // App will restart automatically after download completes
+                        Log("DownloadAndInstallAsync completed");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Auto-update download failed: {ex}");
+                        Debug.WriteLine($"Auto-update failed: {ex.Message}");
+                        await notificationService.ShowAsync(
+                            "Update Failed",
+                            "Please update manually from Settings.");
+                    }
+                }
+                else
+                {
+                    // Auto-update disabled: just notify the user
+                    Log("Auto-update disabled, showing notification only");
+                    await notificationService.ShowAsync(
+                        "Update Available",
+                        $"Canopy v{updateInfo.Version} is available. Open Settings to update.");
                 }
             }
-            else
+            catch (Exception ex)
             {
-                // Auto-update disabled: just notify the user
-                await notificationService.ShowAsync(
-                    "Update Available",
-                    $"Canopy v{updateInfo.Version} is available. Open Settings to update.");
+                Log($"OnUpdateAvailable exception: {ex}");
             }
         });
+    }
+
+    private static void Log(string message)
+    {
+        try
+        {
+            var appDataPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Canopy");
+            Directory.CreateDirectory(appDataPath);
+            var logPath = Path.Combine(appDataPath, "canopy.log");
+            
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            var logLine = $"[{timestamp}] [App] {message}{Environment.NewLine}";
+            File.AppendAllText(logPath, logLine);
+            Debug.WriteLine($"[App] {message}");
+        }
+        catch
+        {
+            // Don't throw on log failures
+        }
     }
 
     private void OnGameStarted(object? sender, GameStatePayload payload)

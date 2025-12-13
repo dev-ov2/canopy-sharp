@@ -103,6 +103,8 @@ jobs:
           files: |
             artifacts/windows/CanopySetup-*.exe
             artifacts/windows/*Portable.zip
+            artifacts/windows/*-full.nupkg
+            artifacts/windows/RELEASES
           body: |
             ## Canopy v${{ steps.version.outputs.VERSION }}
             
