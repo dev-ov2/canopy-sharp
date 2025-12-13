@@ -1,0 +1,18 @@
+<Application
+    x:Class="Canopy.Windows.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Canopy.Windows">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+            
+            <!-- Theme Colors -->
+            <SolidColorBrush x:Key="CanopyPrimaryBrush" Color="#6366F1"/>
+            <SolidColorBrush x:Key="CanopyBackgroundBrush" Color="#0F0F0F"/>
+            <SolidColorBrush x:Key="CanopyForegroundBrush" Color="#FFFFFF"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>..\Canopy.Windows\Assets\canopy.ico</ApplicationIcon>
+    
+    <!-- Make it a single file for easy distribution -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    
+    <!-- Assembly info -->
+    <Version>1.0.0</Version>
+    <Product>Canopy Setup</Product>
+    <Company>Canopy</Company>
+    <Description>Canopy Installer</Description>
+  </PropertyGroup>
+
+  <!-- Embed the application package -->
+  <ItemGroup>
+    <Content Include="Package\*.nupkg" CopyToOutputDirectory="PreserveNewest" Condition="Exists('Package\')" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Images\Sprout.png">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

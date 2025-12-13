@@ -1,0 +1,288 @@
+using Canopy.Core.Models;
+using Gameloop.Vdf;
+using Gameloop.Vdf.Linq;
+
+namespace Canopy.Core.GameDetection;
+
+/// <summary>
+/// Scans installed Steam games by parsing Steam's configuration files
+/// Reads libraryfolders.vdf and appmanifest files
+/// </summary>
+public class SteamScanner : IGameScanner
+{
+    public static readonly string[] IgnoredPathElements = { "wallpaper_engine" };
+
+    public GamePlatform Platform => GamePlatform.Steam;
+    
+    public bool IsAvailable => GetInstallPath() != null;
+
+    /// <summary>
+    /// Gets the Steam installation path based on the current OS
+    /// </summary>
+    public string? GetInstallPath()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return GetWindowsSteamPath();
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            return GetLinuxSteamPath();
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            return GetMacSteamPath();
+        }
+
+        return null;
+    }
+
+    private static string? GetWindowsSteamPath()
+    {
+        // Check common Steam installation paths on Windows
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        var steamPath = Path.Combine(programFiles, "Steam");
+
+        if (Directory.Exists(steamPath))
+            return steamPath;
+
+        // Check registry for Steam path
+        // We should already be in the Windows OS since this is only called through the GetInstallPath switch...
+        // but the IDE was complaining, so here we are.
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Valve\Steam");
+                var path = key?.GetValue("SteamPath") as string;
+                if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                    return path;
+            }
+            catch
+            {
+                // Registry access failed somehow...
+                // Maybe we should log this
+
+            }
+        }
+
+        var drives = new[] { "C:", "D:", "E:", "F:" };
+        foreach (var drive in drives)
+        {
+            var testPath = Path.Combine(drive, "Program Files (x86)", "Steam");
+            if (Directory.Exists(testPath))
+                return testPath;
+
+            testPath = Path.Combine(drive, "Steam");
+            if (Directory.Exists(testPath))
+                return testPath;
+
+            // TODO do we want more paths here?
+        }
+
+        return null;
+    }
+
+    private static string? GetLinuxSteamPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var paths = new[]
+        {
+            Path.Combine(home, ".steam", "steam"),
+            Path.Combine(home, ".local", "share", "Steam"),
+            Path.Combine(home, ".var", "app", "com.valvesoftware.Steam", ".steam", "steam") // Flatpak
+        };
+
+        return paths.FirstOrDefault(Directory.Exists);
+    }
+
+    private static string? GetMacSteamPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var path = Path.Combine(home, "Library", "Application Support", "Steam");
+        return Directory.Exists(path) ? path : null;
+    }
+
+    public async Task<IReadOnlyList<DetectedGame>> DetectGamesAsync(CancellationToken cancellationToken = default)
+    {
+        var steamPath = GetInstallPath();
+        if (steamPath == null)
+            return [];
+
+        var games = new List<DetectedGame>();
+        var libraryFolders = await GetLibraryFoldersAsync(steamPath, cancellationToken);
+
+        foreach (var libraryPath in libraryFolders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var libraryGames = await ScanLibraryFolderAsync(libraryPath, cancellationToken);
+            games.AddRange(libraryGames);
+        }
+
+        return games.AsReadOnly();
+    }
+
+    /// <summary>
+    /// Parses libraryfolders.vdf to get all Steam library locations
+    /// </summary>
+    private async Task<List<string>> GetLibraryFoldersAsync(string steamPath, CancellationToken cancellationToken)
+    {
+        var folders = new List<string>();
+        var libraryFoldersPath = Path.Combine(steamPath, "steamapps", "libraryfolders.vdf");
+
+        if (!File.Exists(libraryFoldersPath))
+        {
+            // we didn't find the libraryfolders file, so we'll just use the main steamapps folder
+            // TODO find a workaround
+            var mainApps = Path.Combine(steamPath, "steamapps");
+            if (Directory.Exists(mainApps))
+                folders.Add(mainApps);
+            return folders;
+        }
+
+        try
+        {
+            var content = await File.ReadAllTextAsync(libraryFoldersPath, cancellationToken);
+            var vdf = VdfConvert.Deserialize(content);
+            var libraryFoldersNode = vdf.Value;
+
+            if (libraryFoldersNode != null)
+            {
+                foreach (var child in libraryFoldersNode.Children())
+                {
+                    if (child is VProperty property && int.TryParse(property.Key, out _))
+                    {
+                        var pathValue = property.Value?["path"]?.Value<string>();
+                        if (!string.IsNullOrEmpty(pathValue))
+                        {
+                            var steamAppsPath = Path.Combine(pathValue, "steamapps");
+                            if (Directory.Exists(steamAppsPath))
+                            {
+                                folders.Add(steamAppsPath);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // VDF parsing failed because of reasons, use the main steamapps folder like above
+            // TODO also find a workaround
+            var mainApps = Path.Combine(steamPath, "steamapps");
+            if (Directory.Exists(mainApps))
+                folders.Add(mainApps);
+        }
+
+        return folders;
+    }
+
+    /// <summary>
+    /// Scans a Steam library folder for installed games by reading appmanifest files
+    /// </summary>
+    private async Task<List<DetectedGame>> ScanLibraryFolderAsync(string steamAppsPath, CancellationToken cancellationToken)
+    {
+        var games = new List<DetectedGame>();
+
+        if (!Directory.Exists(steamAppsPath))
+            return games;
+
+        var manifestFiles = Directory.GetFiles(steamAppsPath, "appmanifest_*.acf");
+
+        foreach (var manifestPath in manifestFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            
+            try
+            {
+                var game = await ParseAppManifestAsync(manifestPath, steamAppsPath, cancellationToken);
+                if (game != null)
+                {
+                    games.Add(game);
+                }
+            }
+            catch
+            {
+                // if something went wrong here, the game just isn't meant to be. Ignore it
+            }
+        }
+
+        return games;
+    }
+
+    /// <summary>
+    /// Parses an appmanifest_*.acf file to extract game information
+    /// </summary>
+    private async Task<DetectedGame?> ParseAppManifestAsync(string manifestPath, string steamAppsPath, CancellationToken cancellationToken)
+    {
+        var content = await File.ReadAllTextAsync(manifestPath, cancellationToken);
+        var vdf = VdfConvert.Deserialize(content);
+        var appState = vdf.Value;
+
+        if (appState == null)
+            return null;
+
+        var appId = appState["appid"]?.Value<string>();
+        var name = appState["name"]?.Value<string>();
+        var installDir = appState["installdir"]?.Value<string>();
+
+        if (string.IsNullOrEmpty(appId) || string.IsNullOrEmpty(name) || string.IsNullOrEmpty(installDir))
+            return null;
+
+        // TODO find a better way to skip variosu tools
+        if (name.Contains("Steamworks Common") || name.Contains("Proton") || name.Contains("Steam Linux Runtime"))
+            return null;
+
+        var installPath = Path.Combine(steamAppsPath, "common", installDir);
+
+        if (!Directory.Exists(installPath))
+            return null;
+
+        var lastPlayed = appState["LastPlayed"]?.Value<long>();
+        var playtime = appState["playtime_forever"]?.Value<int>();
+
+        return new DetectedGame
+        {
+            Id = appId,
+            Name = name,
+            InstallPath = installPath,
+            Platform = GamePlatform.Steam,
+            ExecutablePath = FindMainExecutable(installPath),
+            IconPath = GetSteamGameIcon(appId),
+            LastPlayed = lastPlayed > 0 ? DateTimeOffset.FromUnixTimeSeconds(lastPlayed.Value).DateTime : null,
+            PlaytimeMinutes = playtime
+        };
+    }
+
+    /// <summary>
+    /// Attempts to find the main executable in a game folder
+    /// </summary>
+    private static string? FindMainExecutable(string gamePath)
+    {
+        if (!Directory.Exists(gamePath))
+            return null;
+
+        var ignoredExeNames = new[] { "unins", "crash", "redist", "setup" };
+
+        // Look for common executable patterns
+        var exeFiles = Directory.GetFiles(gamePath, "*.exe", SearchOption.TopDirectoryOnly);
+
+        var preferred = exeFiles.FirstOrDefault(f =>
+        {
+            var name = Path.GetFileNameWithoutExtension(f).ToLowerInvariant();
+            bool launcherIgnored = name.Contains("launcher") && !name.EndsWith("launcher");
+
+            return !ignoredExeNames.Any(ignored => name.Contains(ignored)) && !launcherIgnored;
+        });
+
+        return preferred ?? exeFiles.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Gets the Steam CDN URL for game header image
+    /// </summary>
+    private static string GetSteamGameIcon(string appId)
+    {
+        return $"https://steamcdn-a.akamaihd.net/steam/apps/{appId}/header.jpg";
+    }
+}

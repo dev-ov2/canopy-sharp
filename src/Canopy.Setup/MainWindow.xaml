@@ -1,0 +1,204 @@
+<Window x:Class="Canopy.Setup.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Canopy Setup"
+        Width="550" Height="420"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+
+	<Grid>
+		<Image Name="BackgroundImage" Width="Auto" Height="Auto" Stretch="UniformToFill">
+			<Image.Effect>
+				<!-- Apply BlurEffect with a specified Radius (larger value = more blur) -->
+				<BlurEffect Radius="10" KernelType="Gaussian"/>
+			</Image.Effect>
+		</Image>
+
+	<Border CornerRadius="12" Background="#80000000">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            
+            <!-- Title Bar -->
+            <Grid Grid.Row="0" Margin="20,16,20,0">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Width="12" Height="12" Fill="{StaticResource PrimaryBrush}" Margin="0,0,8,0"/>
+                    <TextBlock Text="Canopy Setup" 
+                               Foreground="{StaticResource TextBrush}" 
+                               FontSize="16" 
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+                <Button Content="x" 
+                        HorizontalAlignment="Right"
+                        Background="Transparent"
+                        Foreground="{StaticResource TextSecondaryBrush}"
+                        BorderThickness="0"
+                        FontSize="16"
+                        Cursor="Hand"
+                        Padding="8,4"
+                        Click="CloseButton_Click"/>
+            </Grid>
+            
+            <!-- Content Area -->
+            <Grid Grid.Row="1" Margin="40,30,40,20">
+                <!-- Welcome Page -->
+                <StackPanel x:Name="WelcomePage" Visibility="Visible">
+                    <TextBlock Text="Welcome to Canopy" 
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="28"
+                               FontWeight="Bold"
+                               Margin="0,0,0,12"/>
+                    <TextBlock Text="Play your favorite games and give back to your community."
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="14"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,30"/>
+                    
+                    <TextBlock Text="This will install Canopy on your computer."
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="14"
+                               Margin="0,0,0,8"/>
+                    <TextBlock x:Name="InstallPathText"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="12"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+                
+                <!-- Options Page -->
+                <StackPanel x:Name="OptionsPage" Visibility="Collapsed">
+                    <TextBlock Text="Installation Options" 
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="28"
+                               FontWeight="Bold"
+                               Margin="0,0,0,12"/>
+                    <TextBlock Text="Choose how you want Canopy to be installed."
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="14"
+                               Margin="0,0,0,30"/>
+                    
+                    <CheckBox x:Name="StartupCheckBox" 
+                              Content="Start Canopy when Windows starts"
+                              IsChecked="True"
+                              Style="{StaticResource ModernCheckBox}"
+                              Margin="0,0,0,16"/>
+                    
+                    <CheckBox x:Name="DesktopShortcutCheckBox" 
+                              Content="Create desktop shortcut"
+                              IsChecked="True"
+                              Style="{StaticResource ModernCheckBox}"
+                              Margin="0,0,0,16"/>
+                    
+                    <CheckBox x:Name="StartMenuCheckBox" 
+                              Content="Create Start Menu shortcut"
+                              IsChecked="True"
+                              Style="{StaticResource ModernCheckBox}"
+                              Margin="0,0,0,16"/>
+                    
+                    <CheckBox x:Name="LaunchAfterInstallCheckBox" 
+                              Content="Launch Canopy after installation"
+                              IsChecked="True"
+                              Style="{StaticResource ModernCheckBox}"/>
+                </StackPanel>
+                
+                <!-- Installing Page -->
+                <StackPanel x:Name="InstallingPage" Visibility="Collapsed">
+                    <TextBlock Text="Installing..." 
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="28"
+                               FontWeight="Bold"
+                               Margin="0,0,0,12"/>
+                    <TextBlock x:Name="InstallStatusText"
+                               Text="Preparing installation..."
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="14"
+                               Margin="0,0,0,30"/>
+                    
+                    <ProgressBar x:Name="InstallProgress"
+                                 Height="8"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="0"
+                                 Background="#30FFFFFF"
+                                 Foreground="{StaticResource PrimaryBrush}"
+                                 BorderThickness="0"/>
+                    
+                    <TextBlock x:Name="ProgressPercentText"
+                               Text="0%"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="12"
+                               HorizontalAlignment="Right"
+                               Margin="0,8,0,0"/>
+                </StackPanel>
+                
+                <!-- Complete Page -->
+                <StackPanel x:Name="CompletePage" Visibility="Collapsed">
+                    <TextBlock Text="Installation Complete!" 
+                               Foreground="{StaticResource TextBrush}"
+                               FontSize="28"
+                               FontWeight="Bold"
+                               Margin="0,0,0,12"/>
+                    <TextBlock Text="Canopy has been successfully installed on your computer."
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="14"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,30"/>
+                    
+                    <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                        <Ellipse Width="24" Height="24" Fill="#22C55E"/>
+                        <TextBlock Text="Ready to use"
+                                   Foreground="{StaticResource TextBrush}"
+                                   FontSize="16"
+                                   VerticalAlignment="Center"
+                                   Margin="12,0,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+                
+                <!-- Error Page -->
+                <StackPanel x:Name="ErrorPage" Visibility="Collapsed">
+                    <TextBlock Text="Installation Failed" 
+                               Foreground="#EF4444"
+                               FontSize="28"
+                               FontWeight="Bold"
+                               Margin="0,0,0,12"/>
+                    <TextBlock x:Name="ErrorText"
+                               Text="An error occurred during installation."
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               FontSize="14"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </Grid>
+            
+            <!-- Bottom Buttons -->
+            <Grid Grid.Row="2" Margin="40,0,40,24">
+                <Button x:Name="BackButton"
+                        Content="Back"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource SecondaryButton}"
+                        Click="BackButton_Click"
+                        Visibility="Collapsed"/>
+                
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="CancelButton"
+                            Content="Cancel"
+                            Style="{StaticResource SecondaryButton}"
+                            Click="CancelButton_Click"
+                            Margin="0,0,12,0"/>
+                    
+                    <Button x:Name="NextButton"
+                            Content="Install"
+                            Style="{StaticResource PrimaryButton}"
+                            Click="NextButton_Click"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+	</Grid>
+</Window>

@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Canopy.Windows",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Canopy.Windows/bin/Debug/net8.0-windows/Canopy.Windows.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/Canopy.Windows",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    }
+  ]
+}

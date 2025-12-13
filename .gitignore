@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.cache
+.idea/
+*.DotSettings.user
+packages/
+TestResults/
+*.nupkg
+publish/
+
+dist/
+installer/output/
