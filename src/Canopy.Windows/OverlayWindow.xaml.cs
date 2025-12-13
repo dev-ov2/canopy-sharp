@@ -279,7 +279,16 @@ public sealed partial class OverlayWindow : Window
                 case "BORDER_IMAGE_UPDATE":
                     if (payload.TryGetProperty("data", out var borderData))
                     {
-                        UpdateBorderImage(borderData.GetString());
+                        // Handle both null JSON value and string value
+                        var borderSource = borderData.ValueKind == JsonValueKind.Null 
+                            ? null 
+                            : borderData.GetString();
+                        UpdateBorderImage(borderSource);
+                    }
+                    else
+                    {
+                        // No data property means clear the border
+                        UpdateBorderImage(null);
                     }
                     break;
             }
