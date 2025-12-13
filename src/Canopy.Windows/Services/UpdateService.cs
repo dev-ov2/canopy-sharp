@@ -23,7 +23,7 @@ public class UpdateService : IDisposable
 
     // GitHub repository info - update these to your actual repo
     private const string GitHubOwner = "dev-ov2";
-    private const string GitHubRepo = "canopy-prime";
+    private const string GitHubRepo = "canopy-sharp";
     private const string GitHubApiBaseUrl = "https://api.github.com";
     
     // Velopack GitHub source URL
