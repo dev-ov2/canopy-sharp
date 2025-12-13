@@ -56,8 +56,18 @@
                             <TextBlock Text="Check for updates"/>
                             <TextBlock x:Name="UpdateStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Visibility="Collapsed"/>
                         </StackPanel>
-                        <Button x:Name="CheckUpdatesButton" Content="Check Now" Grid.Column="1" Click="CheckUpdatesButton_Click"/>
+                        <StackPanel Orientation="Horizontal" Grid.Column="1" Spacing="8">
+                            <Button x:Name="UpdateNowButton" Content="Update Now" Click="UpdateNowButton_Click" Visibility="Collapsed"
+                                    Style="{ThemeResource AccentButtonStyle}"/>
+                            <Button x:Name="CheckUpdatesButton" Content="Check Now" Click="CheckUpdatesButton_Click"/>
+                        </StackPanel>
                     </Grid>
+                    
+                    <!-- Update Progress -->
+                    <StackPanel x:Name="UpdateProgressPanel" Visibility="Collapsed" Spacing="4">
+                        <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" Value="0"/>
+                        <TextBlock x:Name="UpdateProgressText" Text="Downloading..." Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
+                    </StackPanel>
                 </StackPanel>
 
                 <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,8"/>

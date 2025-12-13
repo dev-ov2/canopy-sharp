@@ -27,6 +27,7 @@ public sealed partial class SettingsWindow : Window
     private bool _isCapturingShortcut;
     private TextBox? _activeShortcutBox;
     private bool _settingsLoaded;
+    private UpdateInfo? _availableUpdate;
 
     public SettingsWindow()
     {
@@ -36,8 +37,22 @@ public sealed partial class SettingsWindow : Window
         _platformServices = App.Services.GetRequiredService<WindowsPlatformServices>();
         _updateService = App.Services.GetRequiredService<UpdateService>();
 
+        // Subscribe to update events
+        _updateService.DownloadProgress += OnDownloadProgress;
+        _updateService.UpdateDownloaded += OnUpdateDownloaded;
+        _updateService.UpdateError += OnUpdateError;
+
         SetupWindow();
         this.Activated += OnActivated;
+        this.Closed += OnClosed;
+    }
+
+    private void OnClosed(object sender, WindowEventArgs args)
+    {
+        // Unsubscribe from events
+        _updateService.DownloadProgress -= OnDownloadProgress;
+        _updateService.UpdateDownloaded -= OnUpdateDownloaded;
+        _updateService.UpdateError -= OnUpdateError;
     }
 
     private void OnActivated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)
@@ -110,21 +125,59 @@ public sealed partial class SettingsWindow : Window
     private async void CheckUpdatesButton_Click(object sender, RoutedEventArgs e)
     {
         CheckUpdatesButton.IsEnabled = false;
+        UpdateNowButton.Visibility = Visibility.Collapsed;
         UpdateStatusText.Text = "Checking...";
         UpdateStatusText.Visibility = Visibility.Visible;
 
         try
         {
-            var update = await _updateService.CheckForUpdatesAsync();
-            UpdateStatusText.Text = update == null ? "Up to date!" : $"v{update.Version} available";
+            _availableUpdate = await _updateService.CheckForUpdatesAsync();
+            
+            if (_availableUpdate != null)
+            {
+                UpdateStatusText.Text = $"v{_availableUpdate.Version} available!";
+                UpdateNowButton.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                UpdateStatusText.Text = "You're up to date!";
+                UpdateNowButton.Visibility = Visibility.Collapsed;
+            }
         }
         catch
         {
             UpdateStatusText.Text = "Check failed";
+            UpdateNowButton.Visibility = Visibility.Collapsed;
         }
         finally
         {
             CheckUpdatesButton.IsEnabled = true;
+        }
+    }
+
+    private async void UpdateNowButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_availableUpdate == null) return;
+
+        // Disable buttons and show progress
+        CheckUpdatesButton.IsEnabled = false;
+        UpdateNowButton.IsEnabled = false;
+        UpdateProgressPanel.Visibility = Visibility.Visible;
+        UpdateProgressBar.Value = 0;
+        UpdateProgressText.Text = "Starting download...";
+
+        try
+        {
+            await _updateService.DownloadAndInstallAsync(_availableUpdate);
+            // Note: If Velopack update, the app will restart automatically
+            // If manual update, the app will exit and launch the installer
+        }
+        catch (Exception ex)
+        {
+            UpdateProgressPanel.Visibility = Visibility.Collapsed;
+            UpdateStatusText.Text = $"Update failed: {ex.Message}";
+            CheckUpdatesButton.IsEnabled = true;
+            UpdateNowButton.IsEnabled = true;
         }
     }
 
@@ -212,4 +265,33 @@ public sealed partial class SettingsWindow : Window
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void OnDownloadProgress(object? sender, int progress)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateProgressBar.Value = progress;
+            UpdateProgressText.Text = $"Downloading... {progress}%";
+        });
+    }
+
+    private void OnUpdateDownloaded(object? sender, EventArgs e)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateProgressText.Text = "Installing update... The app will restart.";
+            UpdateProgressBar.IsIndeterminate = true;
+        });
+    }
+
+    private void OnUpdateError(object? sender, string errorMessage)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            UpdateProgressPanel.Visibility = Visibility.Collapsed;
+            UpdateStatusText.Text = $"Error: {errorMessage}";
+            CheckUpdatesButton.IsEnabled = true;
+            UpdateNowButton.IsEnabled = true;
+        });
+    }
 }

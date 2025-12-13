@@ -1,4 +1,4 @@
-﻿using Canopy.Core.Application;
+using Canopy.Core.Application;
 using Canopy.Core.Auth;
 using Canopy.Core.GameDetection;
 using Canopy.Core.Input;
@@ -145,6 +145,48 @@ public partial class App : Application
             Debug.WriteLine("Starting game scan...");
             await gameService.ScanAllGamesAsync();
             Debug.WriteLine("Game scan complete.");
+        });
+
+        // Subscribe to auto-update notifications
+        var updateService = Services.GetRequiredService<UpdateService>();
+        updateService.UpdateAvailable += OnUpdateAvailable;
+    }
+
+    private void OnUpdateAvailable(object? sender, Services.UpdateInfo updateInfo)
+    {
+        DispatcherQueue.TryEnqueue(async () =>
+        {
+            var notificationService = Services.GetRequiredService<INotificationService>();
+            var settings = Services.GetRequiredService<ISettingsService>().Settings;
+
+            if (settings.AutoUpdate)
+            {
+                // Auto-update enabled: download silently and notify when ready
+                await notificationService.ShowAsync(
+                    "Update Available",
+                    $"Canopy v{updateInfo.Version} is downloading...");
+
+                try
+                {
+                    var updateService = Services.GetRequiredService<UpdateService>();
+                    await updateService.DownloadAndInstallAsync(updateInfo);
+                    // App will restart automatically after download completes
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Auto-update failed: {ex.Message}");
+                    await notificationService.ShowAsync(
+                        "Update Failed",
+                        "Please update manually from Settings.");
+                }
+            }
+            else
+            {
+                // Auto-update disabled: just notify the user
+                await notificationService.ShowAsync(
+                    "Update Available",
+                    $"Canopy v{updateInfo.Version} is available. Open Settings to update.");
+            }
         });
     }
 
