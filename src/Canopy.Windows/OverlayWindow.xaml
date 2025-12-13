@@ -6,22 +6,22 @@
     Title="Canopy Overlay">
 
     <Grid x:Name="Root" Background="Transparent">
+    <!-- Border/frame image overlay - rendered ON TOP of content, not behind -->
+    <Image x:Name="OverlayBorder"
+               Width="280"
+               Height="520"
+               IsHitTestVisible="False"
+               Visibility="Collapsed"
+               Stretch="Fill"
+               HorizontalAlignment="Center"
+               VerticalAlignment="Center" />
 
-        <Image x:Name="OverlayBorder"
-                           Width="280"
-                           Height="520"
-                           IsHitTestVisible="False"
-                           Opacity="1"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center" />
-        
-        <!-- Main overlay card -->
+    <!-- Main overlay card -->
         <Border Background="#C8000000"
                 CornerRadius="8"
                 BorderBrush="#00FFFFFF"
                 Margin="4"
                 Padding="24">
-            <!-- Use a UserControl-like wrapper for VisualStateManager -->
             <Grid x:Name="RootLayoutGrid" RowSpacing="16">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/> <!-- Header -->
@@ -91,13 +91,13 @@
                     </Grid.RowDefinitions>
 
                     <!-- Stat 1 -->
-                    <StackPanel Grid.Row="0" Grid.Column="0"  Spacing="2">
+                    <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2">
                         <TextBlock x:Name="Stat1Label" Text="Total Points" Foreground="#80FFFFFF" FontSize="14" TextAlignment="End"/>
                         <TextBlock x:Name="Stat1Value" Text="--" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
                         <TextBlock x:Name="Stat1Helptext" Text="Since 2025 April" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
                     </StackPanel>
 
-                        <!-- Stat 2 -->
+                    <!-- Stat 2 -->
                     <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2">
                         <TextBlock x:Name="Stat2Label" Text="Donations Made" Foreground="#80FFFFFF" FontSize="12" TextAlignment="End"/>
                         <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right">
@@ -106,19 +106,16 @@
                         </StackPanel>
                         <TextBlock x:Name="Stat2Helptext" Text="Via Canopy" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
                     </StackPanel>
-                    
 
                     <!-- Stat 3 -->
-
                     <StackPanel Grid.Row="1" Grid.Column="0" Spacing="2">
-                       <TextBlock x:Name="Stat3Label" Text="To New Donation" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
-                       <TextBlock x:Name="Stat3Value" Text="88.80%" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
-                       <TextBlock x:Name="Stat3Helptext" Text="840 points to go" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
+                        <TextBlock x:Name="Stat3Label" Text="To New Donation" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
+                        <TextBlock x:Name="Stat3Value" Text="88.80%" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
+                        <TextBlock x:Name="Stat3Helptext" Text="840 points to go" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
                     </StackPanel>
-                    
 
                     <!-- Stat 4 -->
-                    <StackPanel Grid.Row="1" Grid.Column="1"  Spacing="2">
+                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
                         <TextBlock x:Name="Stat4Label" Text="Total Donations" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
                         <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right">
                             <TextBlock x:Name="Stat4Value" Text="8" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>

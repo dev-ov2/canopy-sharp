@@ -243,44 +243,85 @@ public sealed partial class OverlayWindow : Window
 
     private void OnDataReceived(IpcMessage message)
     {
-        Debug.WriteLine(message.Payload);
+        if (message.Payload == null) return;
 
-        if (message.Payload != null)
+        try
         {
-
-            Debug.WriteLine(message.Payload);
+            Debug.WriteLine($"OnDataReceived: {message.Payload}");
             var payload = (JsonElement)message.Payload;
-            string? type = payload.GetProperty("type").GetString();
+            
+            if (!payload.TryGetProperty("type", out var typeElement))
+                return;
+                
+            var type = typeElement.GetString();
 
-            if (type == "OVERLAY_STATISTICS")
+            switch (type)
             {
-                var data = payload.GetProperty("data").EnumerateArray();
+                case "OVERLAY_STATISTICS":
+                    if (payload.TryGetProperty("data", out var statsData))
+                    {
+                        var data = statsData.EnumerateArray().ToList();
+                        for (int i = 0; i < data.Count; i++)
+                        {
+                            UpdateLabels(i + 1, data[i]);
+                        }
+                    }
+                    break;
 
-                for (int i = 0; i < data.Count(); i++)
-                {
-                    UpdateLabels(i + 1, data.ElementAt(i));
-                }
-            }
-            else if (type == "INTERVAL_COUNTER_UPDATE")
-            {
-                var counter = payload.GetProperty("data").GetInt32();
-                PointsText.Text = counter.ToString();
-            }
-            else if (type == "BORDER_IMAGE_UPDATE")
-            {
-                var borderSource = payload.GetProperty("data").GetString();
-                if (string.IsNullOrEmpty(borderSource))
-                {
-                    IsBorderVisible = false;
-                    OverlayBorder.Source = null;
-                    return;
-                }
+                case "INTERVAL_COUNTER_UPDATE":
+                    if (payload.TryGetProperty("data", out var counterData))
+                    {
+                        var counter = counterData.GetInt32();
+                        PointsText.Text = counter.ToString();
+                    }
+                    break;
 
-                var bmp = new BitmapImage { UriSource = new Uri(borderSource) };
-                OverlayBorder.Source = bmp;
-                BorderSource = bmp;
-                IsBorderVisible = true;
+                case "BORDER_IMAGE_UPDATE":
+                    if (payload.TryGetProperty("data", out var borderData))
+                    {
+                        UpdateBorderImage(borderData.GetString());
+                    }
+                    break;
             }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error processing overlay data: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Updates the border/frame image overlay.
+    /// </summary>
+    private void UpdateBorderImage(string? borderSource)
+    {
+        if (string.IsNullOrEmpty(borderSource))
+        {
+            // Hide border
+            OverlayBorder.Source = null;
+            OverlayBorder.Visibility = Visibility.Collapsed;
+            BorderSource = null;
+            IsBorderVisible = false;
+            Debug.WriteLine("Border image cleared");
+            return;
+        }
+
+        try
+        {
+            var bmp = new BitmapImage { UriSource = new Uri(borderSource) };
+            OverlayBorder.Source = bmp;
+            OverlayBorder.Visibility = Visibility.Visible;
+            BorderSource = bmp;
+            IsBorderVisible = true;
+            Debug.WriteLine($"Border image set: {borderSource}");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to load border image: {ex.Message}");
+            OverlayBorder.Source = null;
+            OverlayBorder.Visibility = Visibility.Collapsed;
+            BorderSource = null;
+            IsBorderVisible = false;
         }
     }
 
@@ -304,7 +345,7 @@ public sealed partial class OverlayWindow : Window
         {
             GameNameText.Text = gameName;
             GameStatusText.Text = elapsedTime != null
-                ? $"Playing now · Time elapsed: {elapsedTime}"
+                ? $"Playing now Â· Time elapsed: {elapsedTime}"
                 : "Playing now";
             PointsText.Text = "0";
             SetActive();
