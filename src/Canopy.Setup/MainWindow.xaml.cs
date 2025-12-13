@@ -448,6 +448,23 @@ public partial class MainWindow : Window
     {
         try
         {
+            // Copy the installer to the install directory for uninstallation
+            var installerSource = Environment.ProcessPath;
+            var uninstallerPath = Path.Combine(_installPath, "Uninstall.exe");
+            
+            if (!string.IsNullOrEmpty(installerSource) && File.Exists(installerSource))
+            {
+                try
+                {
+                    File.Copy(installerSource, uninstallerPath, true);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Failed to copy uninstaller: {ex.Message}");
+                    // Continue without uninstaller copy
+                }
+            }
+
             var uninstallKey = Registry.CurrentUser.CreateSubKey(
                 $@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{_appName}");
             
@@ -457,7 +474,9 @@ public partial class MainWindow : Window
                 uninstallKey.SetValue("DisplayIcon", exePath);
                 uninstallKey.SetValue("InstallLocation", _installPath);
                 uninstallKey.SetValue("Publisher", "Canopy");
-                uninstallKey.SetValue("DisplayVersion", "1.0.0");
+                uninstallKey.SetValue("DisplayVersion", GetInstalledVersion());
+                uninstallKey.SetValue("UninstallString", $"\"{uninstallerPath}\" --uninstall");
+                uninstallKey.SetValue("QuietUninstallString", $"\"{uninstallerPath}\" --uninstall --quiet");
                 uninstallKey.SetValue("NoModify", 1);
                 uninstallKey.SetValue("NoRepair", 1);
                 
@@ -478,6 +497,21 @@ public partial class MainWindow : Window
         {
             Debug.WriteLine($"Failed to register uninstaller: {ex.Message}");
         }
+    }
+
+    private string GetInstalledVersion()
+    {
+        // Try to get version from the embedded package name or assembly
+        try
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            var version = assembly.GetName().Version;
+            if (version != null)
+                return $"{version.Major}.{version.Minor}.{version.Build}";
+        }
+        catch { }
+        
+        return "1.0.0";
     }
 
     private void LaunchApplication()
