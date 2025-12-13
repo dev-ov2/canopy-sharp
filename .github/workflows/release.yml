@@ -61,73 +61,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Canopy-Windows-x64
-          path: |
-            dist/releases/CanopySetup-*.exe
-            dist/releases/*Portable.zip
-          if-no-files-found: error
-
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Get version from tag
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          elif [[ "${{ github.ref }}" =~ refs/tags/v(.+) ]]; then
-            VERSION="${BASH_REMATCH[1]}"
-          else
-            VERSION="0.0.1-dev.${{ github.run_number }}"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
-
-      - name: Install Velopack CLI
-        run: dotnet tool install -g vpk --version 0.0.626
-
-      - name: Restore dependencies
-        run: dotnet restore src/Canopy.Linux/Canopy.Linux.csproj
-
-      - name: Publish Linux build
-        run: |
-          dotnet publish src/Canopy.Linux/Canopy.Linux.csproj \
-            -c Release \
-            -r linux-x64 \
-            -o dist/publish \
-            --self-contained true \
-            -p:Version=${{ steps.version.outputs.VERSION }} \
-            -p:DebugType=none \
-            -p:DebugSymbols=false
-
-      - name: Create Velopack package
-        run: |
-          vpk pack \
-            -u Canopy \
-            -v ${{ steps.version.outputs.VERSION }} \
-            -p dist/publish \
-            -e Canopy.Linux \
-            -o dist/releases \
-            -c linux \
-            --packTitle Canopy \
-            --packAuthors Canopy
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Canopy-Linux-x64
-          path: dist/releases/*Portable.zip
+          path: dist/releases/*
           if-no-files-found: error
 
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
@@ -138,12 +76,6 @@ jobs:
         with:
           name: Canopy-Windows-x64
           path: artifacts/windows
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: Canopy-Linux-x64
-          path: artifacts/linux
 
       - name: Get version
         id: version
@@ -160,9 +92,6 @@ jobs:
         run: |
           echo "=== Windows artifacts ==="
           ls -la artifacts/windows/
-          echo ""
-          echo "=== Linux artifacts ==="
-          ls -la artifacts/linux/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -172,8 +101,8 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
           files: |
-            artifacts/windows/*
-            artifacts/linux/*
+            artifacts/windows/CanopySetup-*.exe
+            artifacts/windows/*Portable.zip
           body: |
             ## Canopy v${{ steps.version.outputs.VERSION }}
             
@@ -183,7 +112,6 @@ jobs:
             |----------|------|-------------|
             | **Windows** | `CanopySetup-${{ steps.version.outputs.VERSION }}.exe` | **Single-file GUI Installer** (recommended) |
             | Windows | `Canopy-win-Portable.zip` | Portable version (no install) |
-            | Linux | `Canopy-linux-Portable.zip` | Portable version |
             
             ### Installation
             
@@ -199,13 +127,10 @@ jobs:
             1. Download and extract `Canopy-win-Portable.zip`
             2. Run `Canopy.Windows.exe`
             
-            **Linux:**
-            ```bash
-            unzip Canopy-linux-Portable.zip
-            chmod +x Canopy.Linux
-            ./Canopy.Linux
-            ```
-            
             ### Auto-Updates
             
             Canopy automatically checks for updates and will notify you when a new version is available.
+            
+            ---
+            
+            > **Note:** Linux and macOS support is planned for a future release.
