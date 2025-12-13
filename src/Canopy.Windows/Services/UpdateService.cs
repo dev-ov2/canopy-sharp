@@ -412,16 +412,17 @@ public class UpdateService : IDisposable
 
         // Use cmd.exe to launch the installer after a delay, allowing this app to exit first
         // This ensures the current app is fully closed before the installer runs
+        // Use --silent flag for silent update that preserves user data
         var batchContent = $@"@echo off
 timeout /t 2 /nobreak >nul
-start """" ""{tempPath}""
+start """" ""{tempPath}"" --silent
 del ""%~f0""
 ";
         var batchPath = Path.Combine(Path.GetTempPath(), "canopy_update_launcher.bat");
         File.WriteAllText(batchPath, batchContent);
         
         Log($"Created launcher batch file: {batchPath}");
-        Log($"Launching installer via batch file...");
+        Log($"Launching installer via batch file with --silent flag...");
         
         Process.Start(new ProcessStartInfo
         {
