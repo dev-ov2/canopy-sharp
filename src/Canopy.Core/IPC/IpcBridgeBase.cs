@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace Canopy.Core.IPC;
@@ -122,10 +123,11 @@ public abstract class IpcBridgeBase : IIpcBridge
         var tcs = new TaskCompletionSource<IpcMessage>();
         PendingRequests[message.RequestId] = tcs;
 
-        var responseType = message.Type + ":response";
+        var responseType = message.Type + ":" + IpcMessageTypes.Ack;
         IDisposable? subscription = null;
         subscription = Subscribe(responseType, response =>
         {
+            Debug.WriteLine("RECEIVED RESPONSE: " + responseType);
             if (response.RequestId == message.RequestId)
             {
                 PendingRequests.Remove(message.RequestId);
@@ -143,7 +145,8 @@ public abstract class IpcBridgeBase : IIpcBridge
         {
             PendingRequests.Remove(message.RequestId);
             subscription.Dispose();
-            throw new TimeoutException("IPC request timed out");
+            Debug.WriteLine("IPC request timed out");
+            //throw new TimeoutException("IPC request timed out");
         }
 
         var result = await tcs.Task;

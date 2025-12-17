@@ -24,6 +24,7 @@ public sealed partial class MainWindow : Window
     private AppWindow? _appWindow;
     private bool _isInitialized;
     private MinimumSizeEnforcer? _minimumSizeEnforcer;
+    private GameStatePayload? _gameStatePayload;
 
 #if DEBUG
     private const string TargetUrl = "http://localhost:3000?sharp";
@@ -94,8 +95,8 @@ public sealed partial class MainWindow : Window
     {
         if (!_isInitialized)
         {
-            _isInitialized = true;
             await InitializeWebViewAsync();
+            _isInitialized = true;
         }
     }
 
@@ -191,9 +192,25 @@ public sealed partial class MainWindow : Window
             });
         }
 
+        var ack = await _ipcBridge.SendAndReceiveAsync<object>(new IpcMessage
+        {
+            RequestId = Guid.NewGuid().ToString(),
+            Type = IpcMessageTypes.Syn
+        },
+        TimeSpan.FromSeconds(10));
+
+        if (ack != null)
+        {
+            App.DispatcherQueue.TryEnqueue(async () => await _ipcBridge.Send(new IpcMessage
+            {
+                Type = IpcMessageTypes.GameStateUpdate,
+                Payload = _gameStatePayload
+            }));
+        }
+
         await _ipcBridge.Send(new IpcMessage
         {
-            Type = IpcMessageTypes.SYN,
+            Type = IpcMessageTypes.Syn,
             Payload = new { prime = true }
         });
     }
@@ -212,26 +229,26 @@ public sealed partial class MainWindow : Window
 
     private void OnGameStarted(object? sender, GameStatePayload payload)
     {
-        App.DispatcherQueue.TryEnqueue(async () =>
+        _gameStatePayload = payload;
+        if (_isInitialized)
         {
-            await _ipcBridge.Send(new IpcMessage
-            {
-                Type = IpcMessageTypes.GameStateUpdate,
-                Payload = payload
-            });
-        });
+        App.DispatcherQueue.TryEnqueue(async () => await _ipcBridge.Send(new IpcMessage
+        {
+            Type = IpcMessageTypes.GameStateUpdate,
+            Payload = payload
+        }));
+        }
+        ShowAndActivate();
     }
 
     private void OnGameStopped(object? sender, GameStatePayload payload)
     {
-        App.DispatcherQueue.TryEnqueue(async () =>
+        _gameStatePayload = payload;
+        App.DispatcherQueue.TryEnqueue(async () => await _ipcBridge.Send(new IpcMessage
         {
-            await _ipcBridge.Send(new IpcMessage
-            {
-                Type = IpcMessageTypes.GameStateUpdate,
-                Payload = payload
-            });
-        });
+            Type = IpcMessageTypes.GameStateUpdate,
+            Payload = payload
+        }));
     }
 
     /// <summary>

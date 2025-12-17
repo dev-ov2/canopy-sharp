@@ -37,7 +37,8 @@ public class IpcMessage
 public static class IpcMessageTypes
 {
     // iframe
-    public const string SYN = "SYN";
+    public const string Syn = "SYN";
+    public const string Ack = "ACK";
     public const string DataReceived = "DATA_RECEIVED";
     public const string TokenReceived = "TOKEN_RECEIVED";
 
