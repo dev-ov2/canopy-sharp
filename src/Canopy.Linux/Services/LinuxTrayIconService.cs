@@ -7,11 +7,8 @@ using Gtk;
 namespace Canopy.Linux.Services;
 
 /// <summary>
-/// Linux system tray icon service.
-/// On modern Linux desktops, the "system tray" is typically provided by:
-/// - KDE: Built-in StatusNotifierItem support
-/// - GNOME: Requires "AppIndicator and KStatusNotifierItem Support" extension
-/// - Other DEs: Usually have native StatusIcon or AppIndicator support
+/// Linux system tray icon service using AppIndicator (libayatana-appindicator).
+/// This is the standard approach for system tray icons on modern Linux desktops.
 /// </summary>
 public class LinuxTrayIconService : ITrayIconService
 {
@@ -20,12 +17,11 @@ public class LinuxTrayIconService : ITrayIconService
     private bool _isDisposed;
     private bool _initialized;
     
-    // StatusIcon for tray
-    private StatusIcon? _statusIcon;
-    
-    // AppIndicator handle (alternative)
+    // AppIndicator handle
     private IntPtr _appIndicator = IntPtr.Zero;
-    private bool _usingAppIndicator;
+    
+    // Keep reference to prevent GC
+    private Gdk.Pixbuf? _iconPixbuf;
 
     public event EventHandler? ShowWindowRequested;
     public event EventHandler? SettingsRequested;
@@ -46,7 +42,7 @@ public class LinuxTrayIconService : ITrayIconService
         GLib.Idle.Add(() =>
         {
             InitializeInternal();
-            return false; // Don't repeat
+            return false;
         });
     }
 
@@ -56,30 +52,22 @@ public class LinuxTrayIconService : ITrayIconService
         {
             _logger.Info("Initializing tray icon...");
             
-            // Create context menu first
+            // Create context menu first (required for AppIndicator)
             CreateContextMenu();
 
-            // Ensure icon exists in proper location
-            EnsureIconInstalled();
+            // Install icon to standard location
+            var iconName = InstallIcon();
 
-            // Try AppIndicator first (more reliable on modern desktops)
-            if (TryInitializeAppIndicator())
+            // Initialize AppIndicator
+            if (TryInitializeAppIndicator(iconName))
             {
-                _usingAppIndicator = true;
                 _logger.Info("Tray icon initialized using AppIndicator");
                 return;
             }
-
-            // Fallback to StatusIcon
-            if (TryInitializeStatusIcon())
-            {
-                _logger.Info("Tray icon initialized using StatusIcon");
-                return;
-            }
             
-            _logger.Warning("No tray icon backend available");
-            _logger.Warning("On GNOME, install: gnome-shell-extension-appindicator");
-            _logger.Warning("On KDE, tray should work out of the box");
+            _logger.Warning("AppIndicator initialization failed");
+            _logger.Warning("Make sure libayatana-appindicator3 is installed");
+            _logger.Warning("On GNOME, also install: gnome-shell-extension-appindicator");
         }
         catch (Exception ex)
         {
@@ -87,95 +75,120 @@ public class LinuxTrayIconService : ITrayIconService
         }
     }
 
-    private void EnsureIconInstalled()
+    /// <summary>
+    /// Installs the icon to a location where AppIndicator can find it.
+    /// Returns the icon name (without path/extension) to use.
+    /// </summary>
+    private string InstallIcon()
     {
+        const string iconName = "canopy-tray";
+        
         try
         {
             var sourceIcon = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
             
-            // If source doesn't exist, create a placeholder or use system icon
             if (!File.Exists(sourceIcon))
             {
-                _logger.Warning($"Icon not found at {sourceIcon}");
-                return;
+                _logger.Warning($"Icon not found at {sourceIcon}, using fallback");
+                return "applications-games"; // System fallback icon
             }
 
-            // Install to user's icon directory for AppIndicator
-            var userIconDir = Path.Combine(
+            // AppIndicator looks for icons in standard icon theme directories
+            // Install to user's hicolor theme
+            var iconThemeDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".local", "share", "icons", "hicolor", "256x256", "apps");
+                ".local", "share", "icons", "hicolor");
+
+            // Install multiple sizes
+            int[] sizes = { 16, 22, 24, 32, 48, 64, 128, 256 };
             
-            Directory.CreateDirectory(userIconDir);
-            
-            var targetPath = Path.Combine(userIconDir, "canopy.png");
-            if (!File.Exists(targetPath))
+            foreach (var size in sizes)
             {
-                File.Copy(sourceIcon, targetPath, true);
-                _logger.Debug($"Installed icon to {targetPath}");
+                var sizeDir = Path.Combine(iconThemeDir, $"{size}x{size}", "apps");
+                Directory.CreateDirectory(sizeDir);
+                
+                var targetPath = Path.Combine(sizeDir, $"{iconName}.png");
+                
+                // Copy and scale if needed
+                try
+                {
+                    var pixbuf = new Gdk.Pixbuf(sourceIcon);
+                    var scaled = pixbuf.ScaleSimple(size, size, Gdk.InterpType.Bilinear);
+                    scaled?.Save(targetPath, "png");
+                }
+                catch
+                {
+                    // Just copy the original if scaling fails
+                    if (!File.Exists(targetPath))
+                        File.Copy(sourceIcon, targetPath, true);
+                }
             }
 
-            // Also copy to pixmaps for some DEs
-            var pixmapsDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".local", "share", "pixmaps");
-            
-            Directory.CreateDirectory(pixmapsDir);
-            
-            var pixmapPath = Path.Combine(pixmapsDir, "canopy.png");
-            if (!File.Exists(pixmapPath))
+            // Update icon cache
+            try
             {
-                File.Copy(sourceIcon, pixmapPath, true);
-                _logger.Debug($"Installed icon to {pixmapPath}");
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "gtk-update-icon-cache",
+                        Arguments = $"-f -t \"{iconThemeDir}\"",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                process.WaitForExit(5000);
             }
+            catch
+            {
+                // Icon cache update is optional
+            }
+
+            _logger.Debug($"Installed icon as '{iconName}' to {iconThemeDir}");
+            return iconName;
         }
         catch (Exception ex)
         {
             _logger.Warning($"Failed to install icon: {ex.Message}");
+            return "applications-games";
         }
     }
 
-    private bool TryInitializeAppIndicator()
+    private bool TryInitializeAppIndicator(string iconName)
     {
         try
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            
-            // AppIndicator can use a full path or an icon name
-            // Using full path is more reliable for custom icons
-            string iconName;
-            if (File.Exists(iconPath))
-            {
-                iconName = iconPath;
-            }
-            else
-            {
-                // Fall back to a system icon
-                iconName = "applications-games";
-            }
-
+            // Create AppIndicator with the icon name (not path)
+            // Category 0 = ApplicationStatus
             _appIndicator = app_indicator_new("canopy", iconName, 0);
 
             if (_appIndicator == IntPtr.Zero)
             {
-                _logger.Debug("app_indicator_new returned null");
+                _logger.Warning("app_indicator_new returned null");
                 return false;
             }
 
-            // Set status to Active (1)
+            // Set status to Active (1 = ACTIVE)
             app_indicator_set_status(_appIndicator, 1);
             
-            // Set the menu
+            // Set the menu (required for AppIndicator)
             if (_contextMenu != null)
             {
                 app_indicator_set_menu(_appIndicator, _contextMenu.Handle);
             }
 
-            _logger.Debug("AppIndicator created successfully");
+            // Set title for accessibility
+            app_indicator_set_title(_appIndicator, "Canopy");
+
+            _logger.Debug($"AppIndicator created with icon: {iconName}");
             return true;
         }
         catch (DllNotFoundException ex)
         {
-            _logger.Debug($"AppIndicator library not available: {ex.Message}");
+            _logger.Debug($"AppIndicator library not found: {ex.Message}");
             return false;
         }
         catch (EntryPointNotFoundException ex)
@@ -186,76 +199,6 @@ public class LinuxTrayIconService : ITrayIconService
         catch (Exception ex)
         {
             _logger.Debug($"AppIndicator initialization failed: {ex.Message}");
-            return false;
-        }
-    }
-
-    private bool TryInitializeStatusIcon()
-    {
-        try
-        {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            
-            if (File.Exists(iconPath))
-            {
-                try
-                {
-                    var pixbuf = new Gdk.Pixbuf(iconPath);
-                    // Scale to 24x24 for tray
-                    if (pixbuf.Width != 24 || pixbuf.Height != 24)
-                    {
-                        pixbuf = pixbuf.ScaleSimple(24, 24, Gdk.InterpType.Bilinear);
-                    }
-                    _statusIcon = new StatusIcon(pixbuf);
-                }
-                catch (Exception ex)
-                {
-                    _logger.Warning($"Failed to load icon from file: {ex.Message}");
-                    _statusIcon = StatusIcon.NewFromIconName("applications-games");
-                }
-            }
-            else
-            {
-                _statusIcon = StatusIcon.NewFromIconName("applications-games");
-            }
-
-            if (_statusIcon == null)
-            {
-                _logger.Warning("Failed to create StatusIcon");
-                return false;
-            }
-
-            _statusIcon.Title = "Canopy";
-            _statusIcon.TooltipText = "Canopy - Game Overlay";
-            _statusIcon.Visible = true;
-
-            // Connect events
-            _statusIcon.Activate += OnStatusIconActivate;
-            _statusIcon.PopupMenu += OnStatusIconPopupMenu;
-
-            // Check embedded status after a delay
-            GLib.Timeout.Add(2000, () =>
-            {
-                if (_statusIcon != null)
-                {
-                    if (_statusIcon.IsEmbedded)
-                    {
-                        _logger.Info("StatusIcon is embedded in system tray");
-                    }
-                    else
-                    {
-                        _logger.Warning("StatusIcon is not embedded - tray may not be visible");
-                        _logger.Warning("Try installing a system tray extension for your desktop");
-                    }
-                }
-                return false;
-            });
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning($"StatusIcon initialization failed: {ex.Message}");
             return false;
         }
     }
@@ -285,16 +228,6 @@ public class LinuxTrayIconService : ITrayIconService
         _contextMenu.Append(quitItem);
 
         _contextMenu.ShowAll();
-    }
-
-    private void OnStatusIconActivate(object? sender, EventArgs args)
-    {
-        ShowWindowRequested?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void OnStatusIconPopupMenu(object? sender, PopupMenuArgs args)
-    {
-        _contextMenu?.Popup();
     }
 
     public void ShowBalloon(string title, string message)
@@ -327,14 +260,8 @@ public class LinuxTrayIconService : ITrayIconService
 
     public void SetTooltip(string text)
     {
-        GLib.Idle.Add(() =>
-        {
-            if (_statusIcon != null)
-            {
-                _statusIcon.TooltipText = text;
-            }
-            return false;
-        });
+        // AppIndicator doesn't support dynamic tooltips
+        // The title is set at creation time
     }
 
     private static string EscapeShellArg(string arg)
@@ -347,35 +274,22 @@ public class LinuxTrayIconService : ITrayIconService
         if (_isDisposed) return;
         _isDisposed = true;
 
-        GLib.Idle.Add(() =>
-        {
-            if (_statusIcon != null)
-            {
-                _statusIcon.Visible = false;
-                _statusIcon.Dispose();
-                _statusIcon = null;
-            }
-
-            _contextMenu?.Dispose();
-            _contextMenu = null;
-            
-            return false;
-        });
+        _contextMenu?.Dispose();
+        _contextMenu = null;
+        _iconPixbuf?.Dispose();
+        _iconPixbuf = null;
 
         _logger.Info("Tray icon disposed");
     }
 
     #region AppIndicator P/Invoke
     
-    // Try multiple library names for different distros
     private static IntPtr app_indicator_new(string id, string iconName, int category)
     {
-        // Try ayatana first (Arch, newer Ubuntu)
         try { return ayatana_app_indicator_new(id, iconName, category); }
         catch (DllNotFoundException) { }
         catch (EntryPointNotFoundException) { }
         
-        // Try libappindicator3 (older Ubuntu)
         try { return ubuntu_app_indicator_new(id, iconName, category); }
         catch (DllNotFoundException) { }
         catch (EntryPointNotFoundException) { }
@@ -405,6 +319,17 @@ public class LinuxTrayIconService : ITrayIconService
         catch (EntryPointNotFoundException) { }
     }
 
+    private static void app_indicator_set_title(IntPtr indicator, string title)
+    {
+        try { ayatana_app_indicator_set_title(indicator, title); return; }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
+        
+        try { ubuntu_app_indicator_set_title(indicator, title); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
+    }
+
     // Ayatana AppIndicator (Arch, modern distros)
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_new")]
     private static extern IntPtr ayatana_app_indicator_new(string id, string iconName, int category);
@@ -415,6 +340,9 @@ public class LinuxTrayIconService : ITrayIconService
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
     private static extern void ayatana_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
+    [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_title")]
+    private static extern void ayatana_app_indicator_set_title(IntPtr indicator, string title);
+
     // Ubuntu/older AppIndicator
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_new")]
     private static extern IntPtr ubuntu_app_indicator_new(string id, string iconName, int category);
@@ -424,6 +352,9 @@ public class LinuxTrayIconService : ITrayIconService
     
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
     private static extern void ubuntu_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
+
+    [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_title")]
+    private static extern void ubuntu_app_indicator_set_title(IntPtr indicator, string title);
 
     #endregion
 }

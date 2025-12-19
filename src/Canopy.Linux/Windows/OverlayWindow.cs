@@ -13,7 +13,8 @@ using WindowType = Gtk.WindowType;
 namespace Canopy.Linux.Windows;
 
 /// <summary>
-/// Overlay window that sits on top of games
+/// Overlay window that sits on top of games.
+/// Uses X11 EWMH hints to stay above other windows including fullscreen games.
 /// </summary>
 public class OverlayWindow : Window
 {
@@ -41,7 +42,7 @@ public class OverlayWindow : Window
     public bool IsVisible { get; private set; }
     public bool IsDragEnabled => _isDragEnabled;
 
-    public OverlayWindow() : base(WindowType.Toplevel)
+    public OverlayWindow() : base(WindowType.Popup) // Use Popup for overlay behavior
     {
         _logger = CanopyLoggerFactory.CreateLogger<OverlayWindow>();
         _ipcBridge = App.Services.GetRequiredService<LinuxWebViewIpcBridge>();
@@ -67,11 +68,10 @@ public class OverlayWindow : Window
         Resizable = false;
         SkipTaskbarHint = true;
         SkipPagerHint = true;
+        
+        // These are critical for overlay behavior
         AcceptFocus = false;
         KeepAbove = true;
-        
-        // Use Notification type hint - stays on top on most compositors
-        TypeHint = WindowTypeHint.Notification;
         
         // Make window semi-transparent
         AppPaintable = true;
@@ -81,7 +81,7 @@ public class OverlayWindow : Window
             Visual = visual;
         }
 
-        // Handle events
+        // Handle events for dragging
         ButtonPressEvent += OnButtonPress;
         ButtonReleaseEvent += OnButtonRelease;
         MotionNotifyEvent += OnMotionNotify;
@@ -92,47 +92,136 @@ public class OverlayWindow : Window
     {
         RestorePosition();
         
-        // Apply X11 always-on-top using native GDK calls
-        SetGdkWindowProperties(true);
+        // Apply X11 EWMH properties for overlay behavior
+        ApplyX11OverlayHints();
     }
 
-    private void SetGdkWindowProperties(bool overrideRedirect)
+    /// <summary>
+    /// Applies X11 EWMH hints to make the window behave as an overlay.
+    /// Uses _NET_WM_STATE_ABOVE and _NET_WM_WINDOW_TYPE_DOCK.
+    /// </summary>
+    private void ApplyX11OverlayHints()
     {
+        var gdkWindow = this.Window;
+        if (gdkWindow == null)
+        {
+            _logger.Warning("GDK window is null, cannot apply X11 hints");
+            return;
+        }
+
         try
         {
-            var gdkWindow = this.Window;
-            if (gdkWindow == null) return;
-
-            // Get the GDK window handle
-            var gdkHandle = GetGdkWindowHandle(gdkWindow);
-            if (gdkHandle == IntPtr.Zero) return;
-
-            // Set keep above
-            gdk_window_set_keep_above(gdkHandle, true);
+            // These are set on the GTK window, not GDK window
+            TypeHint = WindowTypeHint.Dock;
+            KeepAbove = true;
             
-            // Set override redirect (makes window manager ignore it - true always on top)
-            if (overrideRedirect)
-            {
-                gdk_window_set_override_redirect(gdkHandle, true);
-            }
+            // Make it stick to all workspaces
+            Stick();
             
-            _logger.Debug($"GDK window properties set (override_redirect={overrideRedirect})");
+            _logger.Debug("X11 overlay hints applied via GTK");
         }
         catch (Exception ex)
         {
-            _logger.Warning($"Failed to set GDK window properties: {ex.Message}");
+            _logger.Warning($"Failed to apply hints via GTK: {ex.Message}");
+        }
+
+        // Also try direct X11 calls for better compatibility
+        try
+        {
+            SetX11AlwaysOnTop();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Failed to apply X11 hints directly: {ex.Message}");
         }
     }
 
-    private static IntPtr GetGdkWindowHandle(Gdk.Window gdkWindow)
+    /// <summary>
+    /// Uses direct X11 calls to set _NET_WM_STATE_ABOVE atom.
+    /// This is more reliable than GDK for some window managers.
+    /// </summary>
+    private void SetX11AlwaysOnTop()
     {
-        // Use reflection to get the Handle property
-        var handleProp = gdkWindow.GetType().GetProperty("Handle");
-        if (handleProp != null)
+        var gdkWindow = this.Window;
+        if (gdkWindow == null) return;
+
+        // Get X11 window ID
+        var xid = GetX11WindowId(gdkWindow);
+        if (xid == IntPtr.Zero)
         {
-            return (IntPtr)handleProp.GetValue(gdkWindow)!;
+            _logger.Debug("Could not get X11 window ID");
+            return;
         }
-        return IntPtr.Zero;
+
+        // Get X11 display
+        var display = gdk_x11_get_default_xdisplay();
+        if (display == IntPtr.Zero)
+        {
+            _logger.Debug("Could not get X11 display");
+            return;
+        }
+
+        // Get atoms for _NET_WM_STATE and _NET_WM_STATE_ABOVE
+        var netWmState = XInternAtom(display, "_NET_WM_STATE", false);
+        var netWmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", false);
+        var netWmStateSticky = XInternAtom(display, "_NET_WM_STATE_STICKY", false);
+
+        if (netWmState == IntPtr.Zero || netWmStateAbove == IntPtr.Zero)
+        {
+            _logger.Debug("Could not get X11 atoms");
+            return;
+        }
+
+        // Send client message to set _NET_WM_STATE_ABOVE
+        var rootWindow = XDefaultRootWindow(display);
+        
+        // _NET_WM_STATE message: action (1=add), atom1, atom2
+        SendX11ClientMessage(display, xid, rootWindow, netWmState, 
+            1, // _NET_WM_STATE_ADD
+            netWmStateAbove,
+            netWmStateSticky);
+
+        XFlush(display);
+        
+        _logger.Debug("X11 _NET_WM_STATE_ABOVE set via XSendEvent");
+    }
+
+    private void SendX11ClientMessage(IntPtr display, IntPtr window, IntPtr rootWindow, 
+        IntPtr messageType, int action, IntPtr atom1, IntPtr atom2)
+    {
+        var ev = new XClientMessageEvent
+        {
+            type = 33, // ClientMessage
+            serial = IntPtr.Zero,
+            send_event = true,
+            display = display,
+            window = window,
+            message_type = messageType,
+            format = 32
+        };
+        
+        // Set data (action, atom1, atom2, 0, 0)
+        ev.data_l0 = action;
+        ev.data_l1 = atom1;
+        ev.data_l2 = atom2;
+        ev.data_l3 = IntPtr.Zero;
+        ev.data_l4 = IntPtr.Zero;
+
+        XSendEvent(display, rootWindow, false, 
+            0x180000, // SubstructureRedirectMask | SubstructureNotifyMask
+            ref ev);
+    }
+
+    private IntPtr GetX11WindowId(Gdk.Window gdkWindow)
+    {
+        try
+        {
+            return gdk_x11_window_get_xid(gdkWindow.Handle);
+        }
+        catch
+        {
+            return IntPtr.Zero;
+        }
     }
 
     private void SetupUI()
@@ -354,7 +443,7 @@ public class OverlayWindow : Window
                 
             var type = typeElement.GetString();
 
-            Gtk.Application.Invoke((_, _) =>
+            GLib.Idle.Add(() =>
             {
                 switch (type)
                 {
@@ -372,6 +461,7 @@ public class OverlayWindow : Window
                         }
                         break;
                 }
+                return false;
             });
         }
         catch (Exception ex)
@@ -387,7 +477,7 @@ public class OverlayWindow : Window
 
     public void UpdateGameInfo(string? gameName, string? elapsedTime = null)
     {
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             if (gameName != null)
             {
@@ -403,6 +493,7 @@ public class OverlayWindow : Window
                 _gameStatusLabel!.Text = "sleeping - start a game to wake";
                 _pointsLabel!.Text = "--";
             }
+            return false;
         });
     }
 
@@ -410,16 +501,17 @@ public class OverlayWindow : Window
     {
         _isDragEnabled = !_isDragEnabled;
         
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             if (_dragHandle != null)
             {
                 _dragHandle.Visible = _isDragEnabled;
             }
             
-            // When in drag mode, we need to accept input
-            // Disable override redirect temporarily
-            SetGdkWindowProperties(!_isDragEnabled);
+            // In drag mode, we need to accept focus for input
+            AcceptFocus = _isDragEnabled;
+            
+            return false;
         });
         
         _logger.Debug($"Drag mode: {_isDragEnabled}");
@@ -475,30 +567,24 @@ public class OverlayWindow : Window
         if (!_settingsService.Settings.EnableOverlay)
             return;
 
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             Show();
             RestorePosition();
-            KeepAbove = true;
             
-            // Re-apply GDK properties
-            SetGdkWindowProperties(true);
+            // Re-apply overlay hints
+            ApplyX11OverlayHints();
             
-            // Raise to top
+            // Raise window
             var gdkWindow = this.Window;
-            if (gdkWindow != null)
-            {
-                var handle = GetGdkWindowHandle(gdkWindow);
-                if (handle != IntPtr.Zero)
-                {
-                    gdk_window_raise(handle);
-                }
-            }
+            gdkWindow?.Raise();
             
             IsVisible = true;
             
-            // Start a timer to periodically raise the window
+            // Start timer to periodically ensure we're on top
             StartStayOnTopTimer();
+            
+            return false;
         });
         
         _logger.Debug("Overlay shown");
@@ -508,20 +594,19 @@ public class OverlayWindow : Window
     {
         StopStayOnTopTimer();
         
-        // Raise the window every 500ms to ensure it stays on top
-        _stayOnTopTimerId = GLib.Timeout.Add(500, () =>
+        // Periodically ensure the window stays on top
+        _stayOnTopTimerId = GLib.Timeout.Add(1000, () =>
         {
             if (!IsVisible) return false;
             
+            // Re-raise and re-apply hints
             var gdkWindow = this.Window;
             if (gdkWindow != null)
             {
-                var handle = GetGdkWindowHandle(gdkWindow);
-                if (handle != IntPtr.Zero)
-                {
-                    gdk_window_raise(handle);
-                }
+                gdkWindow.Raise();
+                KeepAbove = true;
             }
+            
             return true; // Continue timer
         });
     }
@@ -544,25 +629,54 @@ public class OverlayWindow : Window
 
         StopStayOnTopTimer();
 
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             Hide();
             IsVisible = false;
+            return false;
         });
         
         _logger.Debug("Overlay hidden");
     }
 
-    #region GDK P/Invoke
+    #region X11 P/Invoke
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XClientMessageEvent
+    {
+        public int type;
+        public IntPtr serial;
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool send_event;
+        public IntPtr display;
+        public IntPtr window;
+        public IntPtr message_type;
+        public int format;
+        public int data_l0;
+        public IntPtr data_l1;
+        public IntPtr data_l2;
+        public IntPtr data_l3;
+        public IntPtr data_l4;
+    }
 
     [DllImport("libgdk-3.so.0")]
-    private static extern void gdk_window_set_keep_above(IntPtr window, bool setting);
+    private static extern IntPtr gdk_x11_get_default_xdisplay();
 
     [DllImport("libgdk-3.so.0")]
-    private static extern void gdk_window_set_override_redirect(IntPtr window, bool overrideRedirect);
+    private static extern IntPtr gdk_x11_window_get_xid(IntPtr gdkWindow);
 
-    [DllImport("libgdk-3.so.0")]
-    private static extern void gdk_window_raise(IntPtr window);
+    [DllImport("libX11.so.6")]
+    private static extern IntPtr XInternAtom(IntPtr display, string atomName, bool onlyIfExists);
+
+    [DllImport("libX11.so.6")]
+    private static extern IntPtr XDefaultRootWindow(IntPtr display);
+
+    [DllImport("libX11.so.6")]
+    private static extern int XSendEvent(IntPtr display, IntPtr window, bool propagate, 
+        int eventMask, ref XClientMessageEvent eventSend);
+
+    [DllImport("libX11.so.6")]
+    private static extern int XFlush(IntPtr display);
 
     #endregion
 }
