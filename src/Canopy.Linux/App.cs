@@ -45,11 +45,8 @@ public class App : Gtk.Application
         _logger = CanopyLoggerFactory.CreateLogger<App>();
         _logger.Info("Canopy Linux starting...");
         
-        // Set default application icon early using centralized helper
-        AppIconManager.SetDefaultWindowIcon();
-        
-        // Pre-install icons to system directories for tray icon support
-        AppIconManager.InstallToSystem();
+        // Initialize icon system (finds, installs, and sets default icons)
+        AppIconManager.Initialize();
     }
 
     protected override void OnActivated()
