@@ -23,13 +23,14 @@ public class MainWindow : Window
     private readonly GameService _gameService;
     private WebView? _webView;
     private Box? _mainBox;
+    private Stack? _stack;
     private Label? _loadingLabel;
     private Spinner? _loadingSpinner;
     private bool _isInitialized;
     private GameStatePayload? _gameStatePayload;
 
 #if DEBUG
-    private const string TargetUrl = "http://192.168.8.145:3000?sharp";
+    private const string TargetUrl = "http://localhost:3000?sharp";
 #else
     private const string TargetUrl = "http://canopy.ovv.gg?sharp";
 #endif
@@ -62,23 +63,52 @@ public class MainWindow : Window
         SetSizeRequest(MinWidth, MinHeight);
         SetPosition(WindowPosition.Center);
 
-        // Set window icon
+        // Set window icon - do this after the window is realized
+        Realized += (_, _) => SetWindowIcon();
+
+        // Handle window events
+        DeleteEvent += OnDeleteEvent;
+        Shown += OnShown;
+    }
+
+    private void SetWindowIcon()
+    {
         var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
         if (System.IO.File.Exists(iconPath))
         {
             try
             {
-                Icon = new Pixbuf(iconPath);
+                var pixbuf = new Pixbuf(iconPath);
+                Icon = pixbuf;
+                
+                // Also set as default for the application
+                SetDefaultIconFromFile(iconPath);
+                
+                _logger.Debug("Window icon set successfully");
             }
             catch (Exception ex)
             {
                 _logger.Warning($"Failed to load window icon: {ex.Message}");
             }
         }
-
-        // Handle window events
-        DeleteEvent += OnDeleteEvent;
-        Shown += OnShown;
+        else
+        {
+            _logger.Warning($"Icon file not found: {iconPath}");
+            // Try to use a system icon as fallback
+            try
+            {
+                var theme = IconTheme.Default;
+                var pixbuf = theme.LoadIcon("applications-games", 256, IconLookupFlags.UseBuiltin);
+                if (pixbuf != null)
+                {
+                    Icon = pixbuf;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug($"Failed to load fallback icon: {ex.Message}");
+            }
+        }
     }
 
     private void SetupUI()
@@ -97,22 +127,23 @@ public class MainWindow : Window
         _loadingSpinner.Active = true;
         _loadingSpinner.SetSizeRequest(40, 40);
 
-        loadingBox.PackStart(_loadingLabel, false, false, 0);
         loadingBox.PackStart(_loadingSpinner, false, false, 10);
+        loadingBox.PackStart(_loadingLabel, false, false, 0);
 
-        // WebView
-        _webView = new WebView();
+        // WebView - create with a UserContentManager for IPC
+        var contentManager = new UserContentManager();
+        _webView = new WebView(contentManager);
         _webView.Expand = true;
         
         ConfigureWebView();
         
         // Stack to show loading or webview
-        var stack = new Stack();
-        stack.AddNamed(loadingBox, "loading");
-        stack.AddNamed(_webView, "webview");
-        stack.VisibleChildName = "loading";
+        _stack = new Stack();
+        _stack.AddNamed(loadingBox, "loading");
+        _stack.AddNamed(_webView, "webview");
+        _stack.VisibleChildName = "loading";
 
-        _mainBox.PackStart(stack, true, true, 0);
+        _mainBox.PackStart(_stack, true, true, 0);
         Add(_mainBox);
 
         // Apply dark theme CSS
@@ -165,7 +196,12 @@ public class MainWindow : Window
         if (!_isInitialized)
         {
             _isInitialized = true;
-            InitializeWebView();
+            // Delay initialization slightly to ensure everything is ready
+            GLib.Idle.Add(() =>
+            {
+                InitializeWebView();
+                return false;
+            });
         }
     }
 
@@ -182,8 +218,10 @@ public class MainWindow : Window
         catch (Exception ex)
         {
             _logger.Error("Failed to initialize WebView", ex);
-            _loadingLabel!.Text = $"Failed to load: {ex.Message}";
-            _loadingSpinner!.Active = false;
+            if (_loadingLabel != null)
+                _loadingLabel.Text = $"Failed to load: {ex.Message}";
+            if (_loadingSpinner != null)
+                _loadingSpinner.Active = false;
         }
     }
 
@@ -194,10 +232,9 @@ public class MainWindow : Window
             _logger.Info("WebView load finished");
             
             // Switch to webview
-            var stack = _mainBox?.Children[0] as Stack;
-            if (stack != null)
+            if (_stack != null)
             {
-                stack.VisibleChildName = "webview";
+                _stack.VisibleChildName = "webview";
             }
 
             SendInitialData();
@@ -260,13 +297,14 @@ public class MainWindow : Window
 
     private void OnGamesDetected(object? sender, IReadOnlyList<DetectedGame> games)
     {
-        Gtk.Application.Invoke(async (_, _) =>
+        GLib.Idle.Add(() =>
         {
-            await _ipcBridge.Send(new IpcMessage
+            _ = _ipcBridge.Send(new IpcMessage
             {
                 Type = IpcMessageTypes.GamesDetected,
                 Payload = games
             });
+            return false;
         });
     }
 
@@ -277,13 +315,14 @@ public class MainWindow : Window
         
         if (_isInitialized)
         {
-            Gtk.Application.Invoke(async (_, _) =>
+            GLib.Idle.Add(() =>
             {
-                await _ipcBridge.Send(new IpcMessage
+                _ = _ipcBridge.Send(new IpcMessage
                 {
                     Type = IpcMessageTypes.GameStateUpdate,
                     Payload = payload
                 });
+                return false;
             });
         }
 
@@ -295,13 +334,14 @@ public class MainWindow : Window
         _gameStatePayload = payload;
         _logger.Info($"Game stopped: {payload.Name}");
         
-        Gtk.Application.Invoke(async (_, _) =>
+        GLib.Idle.Add(() =>
         {
-            await _ipcBridge.Send(new IpcMessage
+            _ = _ipcBridge.Send(new IpcMessage
             {
                 Type = IpcMessageTypes.GameStateUpdate,
                 Payload = payload
             });
+            return false;
         });
     }
 
@@ -355,11 +395,12 @@ public class MainWindow : Window
     /// </summary>
     public void ShowAndActivate()
     {
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             Show();
             Present();
             _logger.Debug("MainWindow shown and activated");
+            return false;
         });
     }
 }

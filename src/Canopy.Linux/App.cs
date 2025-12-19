@@ -8,6 +8,7 @@ using Canopy.Core.Notifications;
 using Canopy.Core.Platform;
 using Canopy.Linux.Services;
 using Canopy.Linux.Windows;
+using Gdk;
 using Gtk;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -43,6 +44,44 @@ public class App : Gtk.Application
         
         _logger = CanopyLoggerFactory.CreateLogger<App>();
         _logger.Info("Canopy Linux starting...");
+        
+        // Set default application icon early
+        SetDefaultIcon();
+    }
+
+    private void SetDefaultIcon()
+    {
+        try
+        {
+            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
+            if (File.Exists(iconPath))
+            {
+                Gtk.Window.SetDefaultIconFromFile(iconPath);
+                _logger.Debug("Default application icon set");
+            }
+            else
+            {
+                _logger.Warning($"Application icon not found: {iconPath}");
+                // Try to set a fallback icon using IconTheme
+                try
+                {
+                    var theme = Gtk.IconTheme.Default;
+                    var pixbuf = theme.LoadIcon("applications-games", 256, Gtk.IconLookupFlags.UseBuiltin);
+                    if (pixbuf != null)
+                    {
+                        Gtk.Window.DefaultIconList = new[] { pixbuf };
+                    }
+                }
+                catch
+                {
+                    _logger.Debug("Could not load fallback icon");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Failed to set default icon: {ex.Message}");
+        }
     }
 
     protected override void OnActivated()
@@ -179,29 +218,31 @@ public class App : Gtk.Application
         if (_appCoordinator == null) return;
 
         _appCoordinator.ShowWindowRequested += (_, _) =>
-            Gtk.Application.Invoke((_, _) => _mainWindow?.ShowAndActivate());
+            GLib.Idle.Add(() => { _mainWindow?.ShowAndActivate(); return false; });
 
         _appCoordinator.ShowSettingsRequested += (_, _) =>
-            Gtk.Application.Invoke((_, _) => ShowSettingsWindow());
+            GLib.Idle.Add(() => { ShowSettingsWindow(); return false; });
 
         _appCoordinator.OverlayToggleRequested += (_, _) =>
-            Gtk.Application.Invoke((_, _) => _overlayWindow?.Toggle());
+            GLib.Idle.Add(() => { _overlayWindow?.Toggle(); return false; });
 
         _appCoordinator.OverlayDragToggleRequested += (_, _) =>
-            Gtk.Application.Invoke((_, _) =>
+            GLib.Idle.Add(() =>
             {
                 if (_overlayWindow?.IsVisible == true)
                     _overlayWindow.ToggleDragMode();
+                return false;
             });
 
         _appCoordinator.TokenReady += (_, e) =>
-            Gtk.Application.Invoke(async (_, _) =>
+            GLib.Idle.Add(() =>
             {
-                await Services.GetRequiredService<LinuxWebViewIpcBridge>().Send(new Core.IPC.IpcMessage
+                _ = Services.GetRequiredService<LinuxWebViewIpcBridge>().Send(new Core.IPC.IpcMessage
                 {
                     Type = Core.IPC.IpcMessageTypes.TokenReceived,
                     Payload = new { token = e.Token }
                 });
+                return false;
             });
 
         _appCoordinator.QuitRequested += async (_, _) =>
@@ -239,10 +280,11 @@ public class App : Gtk.Application
 
     private void OnSettingsChanged(object? sender, AppSettings settings)
     {
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             UnregisterHotkeys();
             RegisterHotkeys();
+            return false;
         });
     }
 
@@ -278,7 +320,7 @@ public class App : Gtk.Application
     {
         _logger.Info($"Game started: {payload.Name}");
         
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             var settings = Services.GetRequiredService<ISettingsService>().Settings;
             if (settings.EnableOverlay)
@@ -286,6 +328,7 @@ public class App : Gtk.Application
                 _overlayWindow?.UpdateGameInfo(payload.Name);
                 _overlayWindow?.ShowOverlay();
             }
+            return false;
         });
     }
 
@@ -293,9 +336,10 @@ public class App : Gtk.Application
     {
         _logger.Info($"Game stopped: {payload.Name}");
         
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             _overlayWindow?.UpdateGameInfo(null);
+            return false;
         });
     }
 

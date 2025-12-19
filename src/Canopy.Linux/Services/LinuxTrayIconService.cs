@@ -7,7 +7,11 @@ using Gtk;
 namespace Canopy.Linux.Services;
 
 /// <summary>
-/// Linux system tray icon service using GtkStatusIcon with fallback approaches
+/// Linux system tray icon service.
+/// On modern Linux desktops, the "system tray" is typically provided by:
+/// - KDE: Built-in StatusNotifierItem support
+/// - GNOME: Requires "AppIndicator and KStatusNotifierItem Support" extension
+/// - Other DEs: Usually have native StatusIcon or AppIndicator support
 /// </summary>
 public class LinuxTrayIconService : ITrayIconService
 {
@@ -16,11 +20,12 @@ public class LinuxTrayIconService : ITrayIconService
     private bool _isDisposed;
     private bool _initialized;
     
-    // StatusIcon (works on many DEs including with AppIndicator extensions)
+    // StatusIcon for tray
     private StatusIcon? _statusIcon;
     
-    // AppIndicator via D-Bus (alternative approach)
+    // AppIndicator handle (alternative)
     private IntPtr _appIndicator = IntPtr.Zero;
+    private bool _usingAppIndicator;
 
     public event EventHandler? ShowWindowRequested;
     public event EventHandler? SettingsRequested;
@@ -37,29 +42,44 @@ public class LinuxTrayIconService : ITrayIconService
         if (_initialized) return;
         _initialized = true;
 
+        // Delay initialization to ensure GTK is fully ready
+        GLib.Idle.Add(() =>
+        {
+            InitializeInternal();
+            return false; // Don't repeat
+        });
+    }
+
+    private void InitializeInternal()
+    {
         try
         {
+            _logger.Info("Initializing tray icon...");
+            
             // Create context menu first
             CreateContextMenu();
 
-            // Try multiple approaches in order of preference
-            
-            // 1. Try StatusIcon first - simpler and works with AppIndicator GNOME extension
+            // Ensure icon exists in proper location
+            EnsureIconInstalled();
+
+            // Try AppIndicator first (more reliable on modern desktops)
+            if (TryInitializeAppIndicator())
+            {
+                _usingAppIndicator = true;
+                _logger.Info("Tray icon initialized using AppIndicator");
+                return;
+            }
+
+            // Fallback to StatusIcon
             if (TryInitializeStatusIcon())
             {
                 _logger.Info("Tray icon initialized using StatusIcon");
                 return;
             }
-
-            // 2. Try AppIndicator
-            if (TryInitializeAppIndicator())
-            {
-                _logger.Info("Tray icon initialized using AppIndicator");
-                return;
-            }
             
-            _logger.Warning("No tray icon backend available - tray icon will not be shown");
-            _logger.Warning("On GNOME, install 'AppIndicator and KStatusNotifierItem Support' extension");
+            _logger.Warning("No tray icon backend available");
+            _logger.Warning("On GNOME, install: gnome-shell-extension-appindicator");
+            _logger.Warning("On KDE, tray should work out of the box");
         }
         catch (Exception ex)
         {
@@ -67,63 +87,50 @@ public class LinuxTrayIconService : ITrayIconService
         }
     }
 
-    private bool TryInitializeStatusIcon()
+    private void EnsureIconInstalled()
     {
         try
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            _logger.Debug($"Looking for icon at: {iconPath}");
+            var sourceIcon = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
             
-            if (File.Exists(iconPath))
+            // If source doesn't exist, create a placeholder or use system icon
+            if (!File.Exists(sourceIcon))
             {
-                var pixbuf = new Gdk.Pixbuf(iconPath);
-                // Scale to appropriate size for tray (typically 22x22 or 24x24)
-                var scaled = pixbuf.ScaleSimple(24, 24, Gdk.InterpType.Bilinear);
-                _statusIcon = new StatusIcon(scaled);
-                _logger.Debug("StatusIcon created from PNG file");
-            }
-            else
-            {
-                // Try system icon
-                _statusIcon = StatusIcon.NewFromIconName("applications-games");
-                _logger.Debug("StatusIcon created from system icon");
+                _logger.Warning($"Icon not found at {sourceIcon}");
+                return;
             }
 
-            if (_statusIcon == null)
+            // Install to user's icon directory for AppIndicator
+            var userIconDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local", "share", "icons", "hicolor", "256x256", "apps");
+            
+            Directory.CreateDirectory(userIconDir);
+            
+            var targetPath = Path.Combine(userIconDir, "canopy.png");
+            if (!File.Exists(targetPath))
             {
-                _logger.Warning("Failed to create StatusIcon");
-                return false;
+                File.Copy(sourceIcon, targetPath, true);
+                _logger.Debug($"Installed icon to {targetPath}");
             }
 
-            _statusIcon.Visible = true;
-            _statusIcon.TooltipText = "Canopy - Game Overlay";
-            _statusIcon.Title = "Canopy";
-
-            // Connect events
-            _statusIcon.Activate += OnStatusIconActivate;
-            _statusIcon.PopupMenu += OnStatusIconPopupMenu;
-
-            // Check if it's actually embedded (visible in tray)
-            // Note: This might return false initially, the icon can take time to embed
-            GLib.Timeout.Add(1000, () =>
+            // Also copy to pixmaps for some DEs
+            var pixmapsDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local", "share", "pixmaps");
+            
+            Directory.CreateDirectory(pixmapsDir);
+            
+            var pixmapPath = Path.Combine(pixmapsDir, "canopy.png");
+            if (!File.Exists(pixmapPath))
             {
-                if (_statusIcon != null && _statusIcon.IsEmbedded)
-                {
-                    _logger.Info("StatusIcon is embedded in system tray");
-                }
-                else
-                {
-                    _logger.Warning("StatusIcon may not be visible - check if your DE supports status icons");
-                }
-                return false; // Don't repeat
-            });
-
-            return true;
+                File.Copy(sourceIcon, pixmapPath, true);
+                _logger.Debug($"Installed icon to {pixmapPath}");
+            }
         }
         catch (Exception ex)
         {
-            _logger.Warning($"StatusIcon initialization failed: {ex.Message}");
-            return false;
+            _logger.Warning($"Failed to install icon: {ex.Message}");
         }
     }
 
@@ -131,32 +138,33 @@ public class LinuxTrayIconService : ITrayIconService
     {
         try
         {
-            // Copy icon to a standard location where AppIndicator can find it
             var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            var iconDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "icons");
-            var targetIconPath = Path.Combine(iconDir, "canopy-tray.png");
-
-            Directory.CreateDirectory(iconDir);
             
-            if (File.Exists(iconPath) && !File.Exists(targetIconPath))
+            // AppIndicator can use a full path or an icon name
+            // Using full path is more reliable for custom icons
+            string iconName;
+            if (File.Exists(iconPath))
             {
-                File.Copy(iconPath, targetIconPath, true);
-                _logger.Debug($"Copied icon to {targetIconPath}");
+                iconName = iconPath;
+            }
+            else
+            {
+                // Fall back to a system icon
+                iconName = "applications-games";
             }
 
-            // Try to create AppIndicator with the icon path
-            string iconName = File.Exists(targetIconPath) ? targetIconPath : "applications-games";
-            
-            _appIndicator = app_indicator_new("canopy-app", iconName, 0);
+            _appIndicator = app_indicator_new("canopy", iconName, 0);
 
             if (_appIndicator == IntPtr.Zero)
             {
-                _logger.Warning("app_indicator_new returned null");
+                _logger.Debug("app_indicator_new returned null");
                 return false;
             }
 
-            app_indicator_set_status(_appIndicator, 1); // Active
+            // Set status to Active (1)
+            app_indicator_set_status(_appIndicator, 1);
             
+            // Set the menu
             if (_contextMenu != null)
             {
                 app_indicator_set_menu(_appIndicator, _contextMenu.Handle);
@@ -165,14 +173,89 @@ public class LinuxTrayIconService : ITrayIconService
             _logger.Debug("AppIndicator created successfully");
             return true;
         }
-        catch (DllNotFoundException)
+        catch (DllNotFoundException ex)
         {
-            _logger.Debug("AppIndicator library not found");
+            _logger.Debug($"AppIndicator library not available: {ex.Message}");
+            return false;
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _logger.Debug($"AppIndicator function not found: {ex.Message}");
             return false;
         }
         catch (Exception ex)
         {
-            _logger.Warning($"AppIndicator initialization failed: {ex.Message}");
+            _logger.Debug($"AppIndicator initialization failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private bool TryInitializeStatusIcon()
+    {
+        try
+        {
+            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
+            
+            if (File.Exists(iconPath))
+            {
+                try
+                {
+                    var pixbuf = new Gdk.Pixbuf(iconPath);
+                    // Scale to 24x24 for tray
+                    if (pixbuf.Width != 24 || pixbuf.Height != 24)
+                    {
+                        pixbuf = pixbuf.ScaleSimple(24, 24, Gdk.InterpType.Bilinear);
+                    }
+                    _statusIcon = new StatusIcon(pixbuf);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warning($"Failed to load icon from file: {ex.Message}");
+                    _statusIcon = StatusIcon.NewFromIconName("applications-games");
+                }
+            }
+            else
+            {
+                _statusIcon = StatusIcon.NewFromIconName("applications-games");
+            }
+
+            if (_statusIcon == null)
+            {
+                _logger.Warning("Failed to create StatusIcon");
+                return false;
+            }
+
+            _statusIcon.Title = "Canopy";
+            _statusIcon.TooltipText = "Canopy - Game Overlay";
+            _statusIcon.Visible = true;
+
+            // Connect events
+            _statusIcon.Activate += OnStatusIconActivate;
+            _statusIcon.PopupMenu += OnStatusIconPopupMenu;
+
+            // Check embedded status after a delay
+            GLib.Timeout.Add(2000, () =>
+            {
+                if (_statusIcon != null)
+                {
+                    if (_statusIcon.IsEmbedded)
+                    {
+                        _logger.Info("StatusIcon is embedded in system tray");
+                    }
+                    else
+                    {
+                        _logger.Warning("StatusIcon is not embedded - tray may not be visible");
+                        _logger.Warning("Try installing a system tray extension for your desktop");
+                    }
+                }
+                return false;
+            });
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"StatusIcon initialization failed: {ex.Message}");
             return false;
         }
     }
@@ -244,18 +327,19 @@ public class LinuxTrayIconService : ITrayIconService
 
     public void SetTooltip(string text)
     {
-        Gtk.Application.Invoke((_, _) =>
+        GLib.Idle.Add(() =>
         {
             if (_statusIcon != null)
             {
                 _statusIcon.TooltipText = text;
             }
+            return false;
         });
     }
 
     private static string EscapeShellArg(string arg)
     {
-        return arg.Replace("\"", "\\\"").Replace("$", "\\$").Replace("`", "\\`");
+        return arg.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("$", "\\$").Replace("`", "\\`");
     }
 
     public void Dispose()
@@ -263,68 +347,83 @@ public class LinuxTrayIconService : ITrayIconService
         if (_isDisposed) return;
         _isDisposed = true;
 
-        if (_statusIcon != null)
+        GLib.Idle.Add(() =>
         {
-            _statusIcon.Visible = false;
-            _statusIcon.Dispose();
-            _statusIcon = null;
-        }
+            if (_statusIcon != null)
+            {
+                _statusIcon.Visible = false;
+                _statusIcon.Dispose();
+                _statusIcon = null;
+            }
 
-        _contextMenu?.Dispose();
-        _contextMenu = null;
+            _contextMenu?.Dispose();
+            _contextMenu = null;
+            
+            return false;
+        });
 
         _logger.Info("Tray icon disposed");
     }
 
     #region AppIndicator P/Invoke
-
-    // Try ayatana first, then ubuntu
+    
+    // Try multiple library names for different distros
     private static IntPtr app_indicator_new(string id, string iconName, int category)
     {
-        try { return app_indicator_new_ayatana(id, iconName, category); }
+        // Try ayatana first (Arch, newer Ubuntu)
+        try { return ayatana_app_indicator_new(id, iconName, category); }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
         
-        try { return app_indicator_new_ubuntu(id, iconName, category); }
+        // Try libappindicator3 (older Ubuntu)
+        try { return ubuntu_app_indicator_new(id, iconName, category); }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
         
         return IntPtr.Zero;
     }
 
     private static void app_indicator_set_status(IntPtr indicator, int status)
     {
-        try { app_indicator_set_status_ayatana(indicator, status); return; }
+        try { ayatana_app_indicator_set_status(indicator, status); return; }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
         
-        try { app_indicator_set_status_ubuntu(indicator, status); }
+        try { ubuntu_app_indicator_set_status(indicator, status); }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
     }
 
     private static void app_indicator_set_menu(IntPtr indicator, IntPtr menu)
     {
-        try { app_indicator_set_menu_ayatana(indicator, menu); return; }
+        try { ayatana_app_indicator_set_menu(indicator, menu); return; }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
         
-        try { app_indicator_set_menu_ubuntu(indicator, menu); }
+        try { ubuntu_app_indicator_set_menu(indicator, menu); }
         catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
     }
 
+    // Ayatana AppIndicator (Arch, modern distros)
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_new")]
-    private static extern IntPtr app_indicator_new_ayatana(string id, string iconName, int category);
+    private static extern IntPtr ayatana_app_indicator_new(string id, string iconName, int category);
     
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_status")]
-    private static extern void app_indicator_set_status_ayatana(IntPtr indicator, int status);
+    private static extern void ayatana_app_indicator_set_status(IntPtr indicator, int status);
     
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
-    private static extern void app_indicator_set_menu_ayatana(IntPtr indicator, IntPtr menu);
+    private static extern void ayatana_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
+    // Ubuntu/older AppIndicator
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_new")]
-    private static extern IntPtr app_indicator_new_ubuntu(string id, string iconName, int category);
+    private static extern IntPtr ubuntu_app_indicator_new(string id, string iconName, int category);
     
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_status")]
-    private static extern void app_indicator_set_status_ubuntu(IntPtr indicator, int status);
+    private static extern void ubuntu_app_indicator_set_status(IntPtr indicator, int status);
     
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
-    private static extern void app_indicator_set_menu_ubuntu(IntPtr indicator, IntPtr menu);
+    private static extern void ubuntu_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
     #endregion
 }
