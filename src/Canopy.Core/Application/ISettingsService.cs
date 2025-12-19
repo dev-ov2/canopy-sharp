@@ -60,6 +60,9 @@ public abstract class SettingsServiceBase : ISettingsService
         _settingsPath = GetSettingsFilePath();
         EnsureDirectoryExists(Path.GetDirectoryName(_settingsPath)!);
         _settings = Load();
+        
+        System.Diagnostics.Debug.WriteLine($"[SettingsService] Loaded from: {_settingsPath}");
+        System.Diagnostics.Debug.WriteLine($"[SettingsService] Settings: StartWithWindows={_settings.StartWithWindows}, AutoUpdate={_settings.AutoUpdate}");
     }
 
     /// <summary>
@@ -82,14 +85,20 @@ public abstract class SettingsServiceBase : ISettingsService
             if (File.Exists(_settingsPath))
             {
                 var json = File.ReadAllText(_settingsPath);
-                return JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+                var settings = JsonSerializer.Deserialize<AppSettings>(json);
+                if (settings != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SettingsService] Loaded existing settings");
+                    return settings;
+                }
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Failed to load settings: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to load settings: {ex.Message}");
         }
 
+        System.Diagnostics.Debug.WriteLine($"[SettingsService] Using default settings");
         return new AppSettings();
     }
 
@@ -101,10 +110,11 @@ public abstract class SettingsServiceBase : ISettingsService
             {
                 var json = JsonSerializer.Serialize(_settings, JsonOptions);
                 File.WriteAllText(_settingsPath, json);
+                System.Diagnostics.Debug.WriteLine($"[SettingsService] Saved settings to: {_settingsPath}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Failed to save settings: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to save settings: {ex.Message}");
             }
         }
     }
@@ -115,6 +125,7 @@ public abstract class SettingsServiceBase : ISettingsService
         {
             updateAction(_settings);
             Save();
+            System.Diagnostics.Debug.WriteLine($"[SettingsService] Settings updated and saved");
             SettingsChanged?.Invoke(this, _settings);
         }
     }
