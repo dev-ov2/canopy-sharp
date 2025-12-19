@@ -92,6 +92,7 @@ public sealed partial class SettingsWindow : Window
     {
         var settings = _settingsService.Settings;
         StartWithWindowsToggle.IsOn = _platformServices.IsRegisteredForStartup();
+        StartOpenToggle.IsOn = settings.StartOpen;
         AutoUpdateToggle.IsOn = settings.AutoUpdate;
         EnableOverlayToggle.IsOn = settings.EnableOverlay;
         OverlayShortcutTextBox.Text = settings.OverlayToggleShortcut;
@@ -112,8 +113,18 @@ public sealed partial class SettingsWindow : Window
     private void StartWithWindowsToggle_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_settingsLoaded) return;
-        _platformServices.SetStartupRegistration(StartWithWindowsToggle.IsOn);
-        _settingsService.Update(s => s.StartWithWindows = StartWithWindowsToggle.IsOn);
+        var isEnabled = StartWithWindowsToggle.IsOn;
+        _platformServices.SetStartupRegistration(isEnabled, StartOpenToggle.IsOn);
+        _settingsService.Update(s => s.StartWithWindows = isEnabled);
+
+        StartOpenGrid.Opacity = isEnabled ? 1.0 : 0.5;
+        StartOpenToggle.IsEnabled = isEnabled;
+    }
+
+    private void StartOpenToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_settingsLoaded) return;
+        _settingsService.Update(s => s.StartOpen = StartOpenToggle.IsOn);
     }
 
     private void AutoUpdateToggle_Toggled(object sender, RoutedEventArgs e)

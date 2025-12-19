@@ -342,7 +342,7 @@ public partial class App : Application
         var isRegistered = platformServices.IsRegisteredForStartup();
         if (isRegistered != settings.StartWithWindows)
         {
-            platformServices.SetStartupRegistration(settings.StartWithWindows);
+            platformServices.SetStartupRegistration(settings.StartWithWindows, settings.StartOpen);
             Debug.WriteLine($"Startup registration synced: {settings.StartWithWindows}");
         }
     }

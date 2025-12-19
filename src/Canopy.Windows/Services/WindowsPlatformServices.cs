@@ -15,9 +15,9 @@ public class WindowsPlatformServices : IPlatformServices
 
     #region Auto-Start (IPlatformServices)
 
-    public Task SetAutoStartAsync(bool enabled)
+    public Task SetAutoStartAsync(bool enabled, bool startOpen)
     {
-        SetStartupRegistration(enabled);
+        SetStartupRegistration(enabled, startOpen);
         return Task.CompletedTask;
     }
 
@@ -50,7 +50,7 @@ public class WindowsPlatformServices : IPlatformServices
     /// <summary>
     /// Registers or unregisters the app to start with Windows
     /// </summary>
-    public bool SetStartupRegistration(bool enable)
+    public bool SetStartupRegistration(bool enable, bool startOpen)
     {
         try
         {
@@ -62,7 +62,11 @@ public class WindowsPlatformServices : IPlatformServices
                 var exePath = Environment.ProcessPath;
                 if (string.IsNullOrEmpty(exePath)) return false;
 
-                key.SetValue(AppName, $"\"{exePath}\" --minimized");
+                if (!startOpen)
+                {
+                    exePath += " --minimized";
+                }
+                key.SetValue(AppName, $"\"{exePath}\"");
                 Debug.WriteLine($"Registered for startup: {exePath}");
             }
             else

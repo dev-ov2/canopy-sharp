@@ -8,7 +8,7 @@ public interface IPlatformServices
     /// <summary>
     /// Runs the application on startup
     /// </summary>
-    Task SetAutoStartAsync(bool enabled);
+    Task SetAutoStartAsync(bool enabled, bool maximized);
 
     /// <summary>
     /// Checks if auto-start is enabled

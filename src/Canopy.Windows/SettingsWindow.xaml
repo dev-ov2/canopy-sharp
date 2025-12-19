@@ -34,9 +34,20 @@
                         </StackPanel>
                         <ToggleSwitch x:Name="StartWithWindowsToggle" Grid.Column="1" Toggled="StartWithWindowsToggle_Toggled"/>
                     </Grid>
+                    <Grid x:Name="StartOpenGrid">
+                      <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="Open on Startup"/>
+              <TextBlock Text="Show Canopy when your computer starts up" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
+            </StackPanel>
+            <ToggleSwitch x:Name="StartOpenToggle" Grid.Column="1" Toggled="StartOpenToggle_Toggled"/>
+          </Grid>
 
-                    <Grid>
-                        <Grid.ColumnDefinitions>
+          <Grid>
+            <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>

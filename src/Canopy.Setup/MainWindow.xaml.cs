@@ -430,7 +430,7 @@ public partial class MainWindow : Window
             {
                 if (enable)
                 {
-                    key.SetValue(_appName, $"\"{exePath}\" --minimized");
+                    key.SetValue(_appName, $"\"{exePath}\"");
                 }
                 else
                 {

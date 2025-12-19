@@ -6,7 +6,8 @@ namespace Canopy.Core.Application;
 public class AppSettings
 {
     // General
-    public bool StartWithWindows { get; set; } = true;  // Named for Windows but applies to all platforms
+    public bool StartWithWindows { get; set; } = true;  // Named for Windows but applies to all 
+    public bool StartOpen { get; set; } = true;
     public bool AutoUpdate { get; set; } = true;
 
     // Overlay
