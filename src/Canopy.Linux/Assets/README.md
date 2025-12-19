@@ -2,7 +2,7 @@
 
 Place your application icon here:
 
-- `canopy.png` - Application icon (any size 256x256 or larger, e.g., 512x512)
+- `canopy.png` - Application icon (any size 256x256+)
 
 The icon will be automatically scaled to all required sizes (16x16 through 512x512).
 

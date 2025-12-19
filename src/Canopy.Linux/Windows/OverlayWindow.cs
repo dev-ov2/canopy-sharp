@@ -14,7 +14,8 @@ namespace Canopy.Linux.Windows;
 
 /// <summary>
 /// Overlay window that displays on top of games and other windows.
-/// Uses multiple techniques to stay on top on X11 and Wayland.
+/// Uses X11 EWMH hints (_NET_WM_STATE_ABOVE, _NET_WM_STATE_FULLSCREEN bypass)
+/// and periodic raising to stay above fullscreen applications.
 /// </summary>
 public class OverlayWindow : Window
 {
@@ -27,22 +28,22 @@ public class OverlayWindow : Window
     private int _dragStartX, _dragStartY;
     private int _windowStartX, _windowStartY;
     private uint _keepOnTopTimerId;
+    private bool _x11Initialized;
 
     // UI Elements
     private Label? _gameNameLabel;
     private Label? _gameStatusLabel;
     private Label? _pointsLabel;
-    private Box? _statsBox;
     private EventBox? _contentBox;
     private EventBox? _dragOverlay;
 
     private const int OverlayWidth = 280;
-    private const int OverlayHeight = 520;
+    private const int OverlayHeight = 480;
 
     public bool IsVisible { get; private set; }
     public bool IsDragEnabled => _isDragEnabled;
 
-    public OverlayWindow() : base(WindowType.Toplevel) // Use Toplevel, not Popup
+    public OverlayWindow() : base(WindowType.Toplevel)
     {
         _logger = CanopyLoggerFactory.CreateLogger<OverlayWindow>();
         _ipcBridge = App.Services.GetRequiredService<LinuxWebViewIpcBridge>();
@@ -54,203 +55,251 @@ public class OverlayWindow : Window
         ConfigureWindow();
         BuildUI();
         
-        Realized += OnWindowRealized;
-        MapEvent += OnMapEvent;
+        // Wire up events for X11 setup
+        Realized += (s, e) => {
+            _logger.Debug("OverlayWindow realized");
+            RestorePosition();
+            InitializeX11();
+        };
+        
+        MapEvent += (s, e) => {
+            _logger.Debug("OverlayWindow mapped");
+            EnsureOnTop();
+        };
         
         _logger.Info("OverlayWindow created");
     }
 
     private void ConfigureWindow()
     {
-        // Basic window properties
         Title = "Canopy Overlay";
         SetDefaultSize(OverlayWidth, OverlayHeight);
         SetSizeRequest(OverlayWidth, OverlayHeight);
         
-        // Remove window decorations
+        // No window decorations
         Decorated = false;
         
-        // Window hints for overlay behavior
+        // Don't show in taskbar or pager
         SkipTaskbarHint = true;
         SkipPagerHint = true;
         
-        // Keep above other windows
+        // Stay above other windows
         KeepAbove = true;
         
-        // Don't steal focus from games
+        // Don't steal focus
         AcceptFocus = false;
         FocusOnMap = false;
         
-        // Stick to all workspaces
+        // Appear on all workspaces
         Stick();
         
-        // Window type hint - Utility or Notification work well for overlays
-        TypeHint = WindowTypeHint.Notification;
+        // Use Dock type for overlay behavior - this is key for staying above fullscreen
+        // Dock windows are meant for panels/docks and stay above normal windows
+        TypeHint = WindowTypeHint.Dock;
         
-        // Enable RGBA for transparency
+        // RGBA for transparency
         AppPaintable = true;
-        var visual = Screen.RgbaVisual;
-        if (visual != null && Screen.IsComposited)
+        if (Screen.IsComposited)
         {
-            Visual = visual;
-            _logger.Debug("RGBA visual enabled");
+            var visual = Screen.RgbaVisual;
+            if (visual != null)
+            {
+                Visual = visual;
+                _logger.Debug("RGBA visual enabled (compositing active)");
+            }
+        }
+        else
+        {
+            _logger.Debug("Compositing not active - transparency may not work");
         }
 
-        // Set up for dragging
+        // Dragging support
         AddEvents((int)(EventMask.ButtonPressMask | EventMask.ButtonReleaseMask | EventMask.PointerMotionMask));
         ButtonPressEvent += OnButtonPress;
         ButtonReleaseEvent += OnButtonRelease;
         MotionNotifyEvent += OnMotionNotify;
     }
 
-    private void OnWindowRealized(object? sender, EventArgs e)
-    {
-        RestorePosition();
-        SetupX11Properties();
-    }
-
-    private void OnMapEvent(object? sender, MapEventArgs e)
-    {
-        // Re-apply properties when window is mapped
-        KeepAbove = true;
-        SetupX11Properties();
-    }
-
     /// <summary>
-    /// Sets up X11 window properties for overlay behavior.
+    /// Initialize X11-specific properties for overlay behavior.
     /// </summary>
-    private void SetupX11Properties()
+    private void InitializeX11()
     {
-        if (Window == null) return;
+        if (_x11Initialized || Window == null) return;
+        
+        var sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
+        _logger.Debug($"Session type: {sessionType}");
+        
+        if (string.Equals(sessionType, "wayland", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.Info("Running on Wayland - X11 hints not applicable");
+            _x11Initialized = true;
+            return;
+        }
 
         try
         {
-            // Ensure we're above
-            Window.Raise();
+            ApplyX11OverlayProperties();
+            _x11Initialized = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"X11 initialization failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Applies X11 Extended Window Manager Hints for overlay behavior.
+    /// Reference: https://specifications.freedesktop.org/wm-spec/wm-spec-1.3.html
+    /// </summary>
+    private void ApplyX11OverlayProperties()
+    {
+        var display = gdk_x11_get_default_xdisplay();
+        if (display == IntPtr.Zero)
+        {
+            _logger.Debug("Failed to get X11 display");
+            return;
+        }
+
+        var xid = gdk_x11_window_get_xid(Window.Handle);
+        if (xid == IntPtr.Zero)
+        {
+            _logger.Debug("Failed to get X11 window ID");
+            return;
+        }
+
+        var root = XDefaultRootWindow(display);
+        
+        // Get atoms
+        var netWmState = XInternAtom(display, "_NET_WM_STATE", false);
+        var netWmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", false);
+        var netWmStateSticky = XInternAtom(display, "_NET_WM_STATE_STICKY", false);
+        var netWmStateSkipTaskbar = XInternAtom(display, "_NET_WM_STATE_SKIP_TASKBAR", false);
+        var netWmStateSkipPager = XInternAtom(display, "_NET_WM_STATE_SKIP_PAGER", false);
+
+        // Add _NET_WM_STATE_ABOVE
+        SendNetWmStateMessage(display, xid, root, netWmState, 1, netWmStateAbove, IntPtr.Zero);
+        
+        // Add _NET_WM_STATE_STICKY (show on all workspaces)
+        SendNetWmStateMessage(display, xid, root, netWmState, 1, netWmStateSticky, IntPtr.Zero);
+        
+        // Add skip taskbar/pager
+        SendNetWmStateMessage(display, xid, root, netWmState, 1, netWmStateSkipTaskbar, netWmStateSkipPager);
+
+        XFlush(display);
+        
+        _logger.Debug("X11 overlay properties applied (_NET_WM_STATE_ABOVE, _NET_WM_STATE_STICKY)");
+    }
+
+    private void SendNetWmStateMessage(IntPtr display, IntPtr window, IntPtr root,
+        IntPtr messageType, int action, IntPtr atom1, IntPtr atom2)
+    {
+        var ev = new XClientMessageEvent
+        {
+            type = 33, // ClientMessage
+            serial = IntPtr.Zero,
+            send_event = true,
+            display = display,
+            window = window,
+            message_type = messageType,
+            format = 32,
+            data_l0 = action, // 0=remove, 1=add, 2=toggle
+            data_l1 = atom1,
+            data_l2 = atom2,
+            data_l3 = 1, // Source indication (1=normal application)
+            data_l4 = IntPtr.Zero
+        };
+
+        // SubstructureRedirectMask | SubstructureNotifyMask = 0x180000
+        XSendEvent(display, root, false, 0x180000, ref ev);
+    }
+
+    /// <summary>
+    /// Ensures the overlay stays on top. Called periodically and on map events.
+    /// </summary>
+    private void EnsureOnTop()
+    {
+        if (!IsVisible) return;
+
+        try
+        {
             KeepAbove = true;
+            Window?.Raise();
             
-            // Try X11-specific setup
-            if (!IsWayland())
+            // Re-apply X11 properties periodically to combat window manager interference
+            if (_x11Initialized)
             {
-                SetX11AlwaysOnTop();
+                try
+                {
+                    var display = gdk_x11_get_default_xdisplay();
+                    var xid = gdk_x11_window_get_xid(Window!.Handle);
+                    if (display != IntPtr.Zero && xid != IntPtr.Zero)
+                    {
+                        // Use XRaiseWindow for more forceful raising
+                        XRaiseWindow(display, xid);
+                        XFlush(display);
+                    }
+                }
+                catch { }
             }
         }
         catch (Exception ex)
         {
-            _logger.Debug($"X11 setup: {ex.Message}");
-        }
-    }
-
-    private bool IsWayland()
-    {
-        var session = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
-        return string.Equals(session, "wayland", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private void SetX11AlwaysOnTop()
-    {
-        try
-        {
-            var gdkWindow = Window;
-            if (gdkWindow == null) return;
-
-            var display = gdk_x11_get_default_xdisplay();
-            if (display == IntPtr.Zero) return;
-
-            var xid = gdk_x11_window_get_xid(gdkWindow.Handle);
-            if (xid == IntPtr.Zero) return;
-
-            var root = XDefaultRootWindow(display);
-            var netWmState = XInternAtom(display, "_NET_WM_STATE", false);
-            var netWmStateAbove = XInternAtom(display, "_NET_WM_STATE_ABOVE", false);
-            var netWmStateSticky = XInternAtom(display, "_NET_WM_STATE_STICKY", false);
-
-            // Send _NET_WM_STATE message to add ABOVE and STICKY
-            var ev = new XClientMessageEvent
-            {
-                type = 33, // ClientMessage
-                send_event = true,
-                display = display,
-                window = xid,
-                message_type = netWmState,
-                format = 32,
-                data_l0 = 1, // _NET_WM_STATE_ADD
-                data_l1 = netWmStateAbove,
-                data_l2 = netWmStateSticky
-            };
-
-            XSendEvent(display, root, false, 0x180000, ref ev);
-            XFlush(display);
-            
-            _logger.Debug("X11 _NET_WM_STATE_ABOVE applied");
-        }
-        catch (Exception ex)
-        {
-            _logger.Debug($"X11 always-on-top failed: {ex.Message}");
+            _logger.Debug($"EnsureOnTop error: {ex.Message}");
         }
     }
 
     private void BuildUI()
     {
-        // Main container
         var overlay = new Overlay();
         
-        // Content area with dark background
+        // Main content
         _contentBox = new EventBox();
         _contentBox.Name = "overlay-content";
         
-        var mainVBox = new Box(Orientation.Vertical, 16);
-        mainVBox.MarginStart = 20;
-        mainVBox.MarginEnd = 20;
-        mainVBox.MarginTop = 20;
-        mainVBox.MarginBottom = 20;
+        var vbox = new Box(Orientation.Vertical, 12);
+        vbox.MarginStart = 20;
+        vbox.MarginEnd = 20;
+        vbox.MarginTop = 20;
+        vbox.MarginBottom = 20;
 
-        // Header
+        // Game info header
         var headerBox = new Box(Orientation.Vertical, 4);
         headerBox.Halign = Align.Center;
 
-        _gameNameLabel = new Label("No game running");
-        _gameNameLabel.Name = "game-name";
-        
-        _gameStatusLabel = new Label("sleeping - start a game to wake");
-        _gameStatusLabel.Name = "game-status";
+        _gameNameLabel = new Label("No game running") { Name = "game-name" };
+        _gameStatusLabel = new Label("Start a game to begin") { Name = "game-status" };
 
         headerBox.PackStart(_gameNameLabel, false, false, 0);
         headerBox.PackStart(_gameStatusLabel, false, false, 0);
 
-        // Points
+        // Points display
         var pointsBox = new Box(Orientation.Vertical, 4);
         pointsBox.Halign = Align.Center;
 
-        _pointsLabel = new Label("--");
-        _pointsLabel.Name = "points-value";
-        
-        var pointsSubLabel = new Label("POINTS EARNED");
-        pointsSubLabel.Name = "points-label";
+        _pointsLabel = new Label("--") { Name = "points-value" };
+        var pointsSubLabel = new Label("POINTS EARNED") { Name = "points-label" };
 
         pointsBox.PackStart(_pointsLabel, false, false, 0);
         pointsBox.PackStart(pointsSubLabel, false, false, 0);
 
-        // Stats
-        _statsBox = new Box(Orientation.Vertical, 12);
-        _statsBox.Halign = Align.Fill;
-        BuildStatsGrid();
+        // Stats grid
+        var statsBox = BuildStatsGrid();
 
-        // Assemble
-        mainVBox.PackStart(headerBox, false, false, 12);
-        mainVBox.PackStart(pointsBox, false, false, 12);
-        mainVBox.PackStart(_statsBox, true, true, 0);
+        vbox.PackStart(headerBox, false, false, 8);
+        vbox.PackStart(pointsBox, false, false, 16);
+        vbox.PackStart(statsBox, true, true, 0);
 
-        _contentBox.Add(mainVBox);
+        _contentBox.Add(vbox);
         overlay.Add(_contentBox);
 
-        // Drag overlay (shown when drag mode is active)
+        // Drag mode overlay
         _dragOverlay = new EventBox();
         _dragOverlay.Name = "drag-overlay";
         _dragOverlay.NoShowAll = true;
         _dragOverlay.Visible = false;
         
-        var dragLabel = new Label("Drag to Move\nPress shortcut to exit");
+        var dragLabel = new Label("Drag to move\nPress shortcut again to exit");
         dragLabel.Name = "drag-label";
         dragLabel.Justify = Justification.Center;
         dragLabel.Valign = Align.Center;
@@ -263,33 +312,29 @@ public class OverlayWindow : Window
         ApplyCSS();
     }
 
-    private void BuildStatsGrid()
+    private Box BuildStatsGrid()
     {
-        var row1 = new Box(Orientation.Horizontal, 16);
-        row1.Homogeneous = true;
-        row1.PackStart(CreateStatWidget("Total Points", "--"), true, true, 0);
-        row1.PackStart(CreateStatWidget("Donations Made", "--"), true, true, 0);
+        var box = new Box(Orientation.Vertical, 12);
+        
+        var row1 = new Box(Orientation.Horizontal, 16) { Homogeneous = true };
+        row1.PackStart(CreateStat("Total Points", "--"), true, true, 0);
+        row1.PackStart(CreateStat("Donations", "--"), true, true, 0);
 
-        var row2 = new Box(Orientation.Horizontal, 16);
-        row2.Homogeneous = true;
-        row2.PackStart(CreateStatWidget("To Next Donation", "--"), true, true, 0);
-        row2.PackStart(CreateStatWidget("Total Donations", "--"), true, true, 0);
+        var row2 = new Box(Orientation.Horizontal, 16) { Homogeneous = true };
+        row2.PackStart(CreateStat("To Next", "--"), true, true, 0);
+        row2.PackStart(CreateStat("Total Given", "--"), true, true, 0);
 
-        _statsBox!.PackStart(row1, false, false, 0);
-        _statsBox.PackStart(row2, false, false, 0);
+        box.PackStart(row1, false, false, 0);
+        box.PackStart(row2, false, false, 0);
+        
+        return box;
     }
 
-    private Box CreateStatWidget(string label, string value)
+    private Box CreateStat(string label, string value)
     {
-        var box = new Box(Orientation.Vertical, 2);
-        box.Halign = Align.Center;
-
-        var labelWidget = new Label(label) { Name = "stat-label" };
-        var valueWidget = new Label(value) { Name = "stat-value" };
-
-        box.PackStart(labelWidget, false, false, 0);
-        box.PackStart(valueWidget, false, false, 0);
-
+        var box = new Box(Orientation.Vertical, 2) { Halign = Align.Center };
+        box.PackStart(new Label(label) { Name = "stat-label" }, false, false, 0);
+        box.PackStart(new Label(value) { Name = "stat-value" }, false, false, 0);
         return box;
     }
 
@@ -297,51 +342,59 @@ public class OverlayWindow : Window
     {
         var css = @"
             #overlay-content {
-                background-color: rgba(0, 0, 0, 0.85);
+                background-color: rgba(15, 15, 15, 0.92);
                 border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
             }
             #game-name {
-                color: white;
-                font-size: 20px;
+                color: #ffffff;
+                font-size: 18px;
                 font-weight: bold;
             }
             #game-status {
-                color: rgba(255, 255, 255, 0.6);
-                font-size: 12px;
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 11px;
             }
             #points-value {
-                color: white;
-                font-size: 42px;
+                color: #ffffff;
+                font-size: 36px;
                 font-weight: bold;
             }
             #points-label {
-                color: rgba(255, 255, 255, 0.6);
-                font-size: 14px;
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 12px;
                 letter-spacing: 2px;
             }
             #stat-label {
-                color: rgba(255, 255, 255, 0.6);
+                color: rgba(255, 255, 255, 0.5);
                 font-size: 10px;
             }
             #stat-value {
-                color: white;
-                font-size: 20px;
+                color: #ffffff;
+                font-size: 18px;
                 font-weight: bold;
             }
             #drag-overlay {
-                background-color: rgba(234, 179, 8, 0.7);
+                background-color: rgba(234, 179, 8, 0.85);
                 border-radius: 12px;
             }
             #drag-label {
-                color: #000;
-                font-size: 16px;
+                color: #000000;
+                font-size: 14px;
                 font-weight: bold;
             }
         ";
 
-        var provider = new CssProvider();
-        provider.LoadFromData(css);
-        StyleContext.AddProviderForScreen(Screen.Default, provider, StyleProviderPriority.Application);
+        try
+        {
+            var provider = new CssProvider();
+            provider.LoadFromData(css);
+            StyleContext.AddProviderForScreen(Screen.Default, provider, StyleProviderPriority.Application);
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"CSS error: {ex.Message}");
+        }
     }
 
     private void RestorePosition()
@@ -350,6 +403,7 @@ public class OverlayWindow : Window
         if (settings.OverlayX.HasValue && settings.OverlayY.HasValue)
         {
             Move(settings.OverlayX.Value, settings.OverlayY.Value);
+            _logger.Debug($"Restored position: {settings.OverlayX}, {settings.OverlayY}");
         }
         else
         {
@@ -365,7 +419,7 @@ public class OverlayWindow : Window
             var x = screen.Width - OverlayWidth - 20;
             var y = 20;
             Move(x, y);
-            _logger.Debug($"Positioned at {x}, {y}");
+            _logger.Debug($"Default position: {x}, {y}");
         }
     }
 
@@ -373,7 +427,7 @@ public class OverlayWindow : Window
     {
         GetPosition(out int x, out int y);
         _settingsService.Update(s => { s.OverlayX = x; s.OverlayY = y; });
-        _logger.Debug($"Position saved: {x}, {y}");
+        _logger.Debug($"Saved position: {x}, {y}");
     }
 
     public void UpdateGameInfo(string? gameName, string? elapsedTime = null)
@@ -383,22 +437,23 @@ public class OverlayWindow : Window
             if (gameName != null)
             {
                 _gameNameLabel!.Text = gameName;
-                _gameStatusLabel!.Text = elapsedTime != null
-                    ? $"Playing · {elapsedTime}"
-                    : "Playing now";
+                _gameStatusLabel!.Text = elapsedTime ?? "Playing now";
                 _pointsLabel!.Text = "0";
             }
             else
             {
                 _gameNameLabel!.Text = "No game running";
-                _gameStatusLabel!.Text = "sleeping - start a game";
+                _gameStatusLabel!.Text = "Start a game to begin";
                 _pointsLabel!.Text = "--";
             }
             return false;
         });
     }
 
-    private void OnGameStarted(IpcMessage message) { }
+    private void OnGameStarted(IpcMessage message)
+    {
+        _logger.Debug("IPC: GameStarted received");
+    }
 
     private void OnDataReceived(IpcMessage message)
     {
@@ -407,27 +462,33 @@ public class OverlayWindow : Window
         try
         {
             var payload = (JsonElement)message.Payload;
-            if (!payload.TryGetProperty("type", out var typeElement)) return;
-
-            var type = typeElement.GetString();
-            GLib.Idle.Add(() =>
+            if (payload.TryGetProperty("type", out var typeElem) && 
+                typeElem.GetString() == "INTERVAL_COUNTER_UPDATE" &&
+                payload.TryGetProperty("data", out var data))
             {
-                if (type == "INTERVAL_COUNTER_UPDATE" && payload.TryGetProperty("data", out var data))
+                var points = data.GetInt32();
+                GLib.Idle.Add(() =>
                 {
-                    _pointsLabel!.Text = data.GetInt32().ToString();
-                }
-                return false;
-            });
+                    _pointsLabel!.Text = points.ToString();
+                    return false;
+                });
+            }
         }
         catch (Exception ex)
         {
-            _logger.Warning($"Error processing overlay data: {ex.Message}");
+            _logger.Debug($"Data processing error: {ex.Message}");
         }
     }
 
     public void Toggle()
     {
-        if (!_settingsService.Settings.EnableOverlay) return;
+        _logger.Debug($"Toggle called. IsVisible={IsVisible}, EnableOverlay={_settingsService.Settings.EnableOverlay}");
+        
+        if (!_settingsService.Settings.EnableOverlay)
+        {
+            _logger.Debug("Overlay disabled in settings");
+            return;
+        }
 
         if (IsVisible)
             HideOverlay();
@@ -437,30 +498,48 @@ public class OverlayWindow : Window
 
     public void ShowOverlay()
     {
-        if (!_settingsService.Settings.EnableOverlay) return;
+        if (!_settingsService.Settings.EnableOverlay)
+        {
+            _logger.Debug("ShowOverlay: Overlay disabled in settings");
+            return;
+        }
 
+        _logger.Info("Showing overlay");
+        
         GLib.Idle.Add(() =>
         {
-            ShowAll();
-            _dragOverlay?.Hide();
-            RestorePosition();
-            
-            // Ensure on top
-            KeepAbove = true;
-            Window?.Raise();
-            SetupX11Properties();
-            
-            IsVisible = true;
-            StartKeepOnTopTimer();
-            
-            _logger.Debug("Overlay shown");
+            try
+            {
+                ShowAll();
+                _dragOverlay?.Hide();
+                RestorePosition();
+                
+                // Apply all overlay properties
+                KeepAbove = true;
+                InitializeX11();
+                EnsureOnTop();
+                
+                IsVisible = true;
+                StartKeepOnTopTimer();
+                
+                _logger.Debug("Overlay shown successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"ShowOverlay failed: {ex.Message}");
+            }
             return false;
         });
     }
 
     public void HideOverlay()
     {
-        if (_isDragEnabled) ToggleDragMode();
+        _logger.Info("Hiding overlay");
+        
+        if (_isDragEnabled)
+        {
+            ToggleDragMode();
+        }
         
         StopKeepOnTopTimer();
 
@@ -477,16 +556,18 @@ public class OverlayWindow : Window
     {
         StopKeepOnTopTimer();
         
-        // Periodically ensure window stays on top (every 2 seconds)
-        _keepOnTopTimerId = GLib.Timeout.Add(2000, () =>
+        // Aggressively ensure window stays on top every 500ms
+        // This is necessary because some window managers (especially with fullscreen games)
+        // may lower the window despite _NET_WM_STATE_ABOVE
+        _keepOnTopTimerId = GLib.Timeout.Add(500, () =>
         {
             if (!IsVisible) return false;
             
-            KeepAbove = true;
-            Window?.Raise();
-            
+            EnsureOnTop();
             return true;
         });
+        
+        _logger.Debug("Keep-on-top timer started (500ms interval)");
     }
 
     private void StopKeepOnTopTimer()
@@ -495,12 +576,14 @@ public class OverlayWindow : Window
         {
             GLib.Source.Remove(_keepOnTopTimerId);
             _keepOnTopTimerId = 0;
+            _logger.Debug("Keep-on-top timer stopped");
         }
     }
 
     public void ToggleDragMode()
     {
         _isDragEnabled = !_isDragEnabled;
+        _logger.Debug($"Drag mode: {_isDragEnabled}");
         
         GLib.Idle.Add(() =>
         {
@@ -509,9 +592,7 @@ public class OverlayWindow : Window
                 _dragOverlay.Visible = _isDragEnabled;
                 if (_isDragEnabled) _dragOverlay.ShowAll();
             }
-            
             AcceptFocus = _isDragEnabled;
-            _logger.Debug($"Drag mode: {_isDragEnabled}");
             return false;
         });
     }
@@ -524,6 +605,7 @@ public class OverlayWindow : Window
             _dragStartX = (int)args.Event.XRoot;
             _dragStartY = (int)args.Event.YRoot;
             GetPosition(out _windowStartX, out _windowStartY);
+            _logger.Debug($"Drag started at {_dragStartX}, {_dragStartY}");
         }
     }
 
@@ -533,6 +615,7 @@ public class OverlayWindow : Window
         {
             _isDragging = false;
             SavePosition();
+            _logger.Debug("Drag ended, position saved");
         }
     }
 
@@ -579,6 +662,9 @@ public class OverlayWindow : Window
 
     [DllImport("libX11.so.6")]
     private static extern int XSendEvent(IntPtr display, IntPtr window, bool propagate, int mask, ref XClientMessageEvent ev);
+
+    [DllImport("libX11.so.6")]
+    private static extern int XRaiseWindow(IntPtr display, IntPtr window);
 
     [DllImport("libX11.so.6")]
     private static extern int XFlush(IntPtr display);
