@@ -25,6 +25,7 @@ public class OverlayWindow : Window
     private bool _isDragging;
     private int _dragStartX, _dragStartY;
     private int _windowStartX, _windowStartY;
+    private uint _stayOnTopTimerId;
 
     // UI Elements
     private Label? _gameNameLabel;
@@ -63,11 +64,14 @@ public class OverlayWindow : Window
         Title = "Canopy Overlay";
         SetDefaultSize(DefaultWidth, DefaultHeight);
         Decorated = false;
+        Resizable = false;
         SkipTaskbarHint = true;
         SkipPagerHint = true;
+        AcceptFocus = false;
         KeepAbove = true;
-        AcceptFocus = false; // Don't steal focus from games
-        TypeHint = WindowTypeHint.Dock; // Dock type windows stay on top
+        
+        // Use Notification type hint - stays on top on most compositors
+        TypeHint = WindowTypeHint.Notification;
         
         // Make window semi-transparent
         AppPaintable = true;
@@ -86,24 +90,49 @@ public class OverlayWindow : Window
 
     private void OnRealized(object? sender, EventArgs args)
     {
-        // Additional X11 setup to ensure window stays on top
         RestorePosition();
-        SetStayOnTop();
+        
+        // Apply X11 always-on-top using native GDK calls
+        SetGdkWindowProperties(true);
     }
 
-    private void SetStayOnTop()
+    private void SetGdkWindowProperties(bool overrideRedirect)
     {
         try
         {
-            // Use GDK to set additional window hints
-            // GTK's KeepAbove property should be sufficient for most compositors
-            // Re-assert it here after the window is realized
-            KeepAbove = true;
+            var gdkWindow = this.Window;
+            if (gdkWindow == null) return;
+
+            // Get the GDK window handle
+            var gdkHandle = GetGdkWindowHandle(gdkWindow);
+            if (gdkHandle == IntPtr.Zero) return;
+
+            // Set keep above
+            gdk_window_set_keep_above(gdkHandle, true);
+            
+            // Set override redirect (makes window manager ignore it - true always on top)
+            if (overrideRedirect)
+            {
+                gdk_window_set_override_redirect(gdkHandle, true);
+            }
+            
+            _logger.Debug($"GDK window properties set (override_redirect={overrideRedirect})");
         }
         catch (Exception ex)
         {
-            _logger.Warning($"Failed to set stay-on-top properties: {ex.Message}");
+            _logger.Warning($"Failed to set GDK window properties: {ex.Message}");
         }
+    }
+
+    private static IntPtr GetGdkWindowHandle(Gdk.Window gdkWindow)
+    {
+        // Use reflection to get the Handle property
+        var handleProp = gdkWindow.GetType().GetProperty("Handle");
+        if (handleProp != null)
+        {
+            return (IntPtr)handleProp.GetValue(gdkWindow)!;
+        }
+        return IntPtr.Zero;
     }
 
     private void SetupUI()
@@ -181,7 +210,6 @@ public class OverlayWindow : Window
 
     private void CreateStatsGrid()
     {
-        // Create 2x2 grid of stats
         var row1 = new Box(Orientation.Horizontal, 12);
         var row2 = new Box(Orientation.Horizontal, 12);
 
@@ -355,7 +383,6 @@ public class OverlayWindow : Window
     private void UpdateStats(JsonElement statsData)
     {
         var data = statsData.EnumerateArray().ToList();
-        // Update stat labels based on data
     }
 
     public void UpdateGameInfo(string? gameName, string? elapsedTime = null)
@@ -389,6 +416,10 @@ public class OverlayWindow : Window
             {
                 _dragHandle.Visible = _isDragEnabled;
             }
+            
+            // When in drag mode, we need to accept input
+            // Disable override redirect temporarily
+            SetGdkWindowProperties(!_isDragEnabled);
         });
         
         _logger.Debug($"Drag mode: {_isDragEnabled}");
@@ -447,14 +478,61 @@ public class OverlayWindow : Window
         Gtk.Application.Invoke((_, _) =>
         {
             Show();
-            Present();
-            KeepAbove = true; // Re-assert on show
+            RestorePosition();
+            KeepAbove = true;
+            
+            // Re-apply GDK properties
+            SetGdkWindowProperties(true);
+            
+            // Raise to top
+            var gdkWindow = this.Window;
+            if (gdkWindow != null)
+            {
+                var handle = GetGdkWindowHandle(gdkWindow);
+                if (handle != IntPtr.Zero)
+                {
+                    gdk_window_raise(handle);
+                }
+            }
             
             IsVisible = true;
-            RestorePosition();
+            
+            // Start a timer to periodically raise the window
+            StartStayOnTopTimer();
         });
         
         _logger.Debug("Overlay shown");
+    }
+
+    private void StartStayOnTopTimer()
+    {
+        StopStayOnTopTimer();
+        
+        // Raise the window every 500ms to ensure it stays on top
+        _stayOnTopTimerId = GLib.Timeout.Add(500, () =>
+        {
+            if (!IsVisible) return false;
+            
+            var gdkWindow = this.Window;
+            if (gdkWindow != null)
+            {
+                var handle = GetGdkWindowHandle(gdkWindow);
+                if (handle != IntPtr.Zero)
+                {
+                    gdk_window_raise(handle);
+                }
+            }
+            return true; // Continue timer
+        });
+    }
+
+    private void StopStayOnTopTimer()
+    {
+        if (_stayOnTopTimerId != 0)
+        {
+            GLib.Source.Remove(_stayOnTopTimerId);
+            _stayOnTopTimerId = 0;
+        }
     }
 
     public void HideOverlay()
@@ -464,6 +542,8 @@ public class OverlayWindow : Window
             ToggleDragMode();
         }
 
+        StopStayOnTopTimer();
+
         Gtk.Application.Invoke((_, _) =>
         {
             Hide();
@@ -472,4 +552,17 @@ public class OverlayWindow : Window
         
         _logger.Debug("Overlay hidden");
     }
+
+    #region GDK P/Invoke
+
+    [DllImport("libgdk-3.so.0")]
+    private static extern void gdk_window_set_keep_above(IntPtr window, bool setting);
+
+    [DllImport("libgdk-3.so.0")]
+    private static extern void gdk_window_set_override_redirect(IntPtr window, bool overrideRedirect);
+
+    [DllImport("libgdk-3.so.0")]
+    private static extern void gdk_window_raise(IntPtr window);
+
+    #endregion
 }
