@@ -20,10 +20,19 @@ public class LinuxPlatformServices : IPlatformServices
 
     #region Auto-Start
 
+    /// <summary>
+    /// Sets up autostart for Linux desktops.
+    /// Works with:
+    /// - GNOME (uses XDG autostart)
+    /// - KDE Plasma (uses XDG autostart)
+    /// - XFCE (uses XDG autostart)
+    /// - Other XDG-compliant desktops
+    /// </summary>
     public Task SetAutoStartAsync(bool enabled, bool startOpen)
     {
         try
         {
+            // XDG autostart directory - works on most Linux desktops including Arch
             var autostartDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".config", "autostart");
@@ -33,30 +42,39 @@ public class LinuxPlatformServices : IPlatformServices
 
             if (enabled)
             {
-                var execPath = Process.GetCurrentProcess().MainModule?.FileName ?? "canopy";
+                var execPath = GetExecutablePath();
                 var args = startOpen ? "" : " --minimized";
+                var iconPath = AppIconManager.GetIconPath() ?? "canopy";
                 
+                // Desktop entry format per XDG specification
+                // https://specifications.freedesktop.org/autostart-spec/autostart-spec-latest.html
                 var desktopEntry = $"""
                     [Desktop Entry]
                     Type=Application
+                    Version=1.0
                     Name=Canopy
+                    GenericName=Game Overlay
                     Comment=Game overlay and tracking application
-                    Exec={execPath}{args}
-                    Icon=canopy
+                    Exec="{execPath}"{args}
+                    Icon={iconPath}
                     Terminal=false
                     Categories=Game;Utility;
+                    StartupWMClass=canopy
                     X-GNOME-Autostart-enabled=true
+                    X-KDE-autostart-after=panel
+                    Hidden=false
                     """;
                 
                 File.WriteAllText(desktopFilePath, desktopEntry);
-                _logger.Info($"Registered for autostart: {desktopFilePath}");
+                _logger.Info($"Autostart enabled: {desktopFilePath}");
+                _logger.Debug($"Exec={execPath}{args}");
             }
             else
             {
                 if (File.Exists(desktopFilePath))
                 {
                     File.Delete(desktopFilePath);
-                    _logger.Info("Unregistered from autostart");
+                    _logger.Info("Autostart disabled");
                 }
             }
         }
@@ -76,12 +94,63 @@ public class LinuxPlatformServices : IPlatformServices
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".config", "autostart", DesktopFileName);
             
-            return Task.FromResult(File.Exists(autostartPath));
+            if (!File.Exists(autostartPath))
+                return Task.FromResult(false);
+            
+            // Check if the entry is not hidden/disabled
+            var content = File.ReadAllText(autostartPath);
+            if (content.Contains("Hidden=true", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(false);
+            if (content.Contains("X-GNOME-Autostart-enabled=false", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(false);
+            
+            return Task.FromResult(true);
         }
         catch
         {
             return Task.FromResult(false);
         }
+    }
+
+    /// <summary>
+    /// Gets the path to the current executable.
+    /// </summary>
+    private static string GetExecutablePath()
+    {
+        // Try multiple methods to get the executable path
+        
+        // Method 1: Process.MainModule
+        var mainModule = Process.GetCurrentProcess().MainModule?.FileName;
+        if (!string.IsNullOrEmpty(mainModule) && File.Exists(mainModule))
+        {
+            return mainModule;
+        }
+        
+        // Method 2: AppContext.BaseDirectory + known executable name
+        var baseDir = AppContext.BaseDirectory;
+        var exePath = Path.Combine(baseDir, "Canopy.Linux");
+        if (File.Exists(exePath))
+        {
+            return exePath;
+        }
+        
+        // Method 3: /proc/self/exe (Linux-specific)
+        try
+        {
+            var procPath = "/proc/self/exe";
+            if (File.Exists(procPath))
+            {
+                var realPath = new FileInfo(procPath).LinkTarget;
+                if (!string.IsNullOrEmpty(realPath) && File.Exists(realPath))
+                {
+                    return realPath;
+                }
+            }
+        }
+        catch { }
+        
+        // Fallback
+        return mainModule ?? Path.Combine(baseDir, "Canopy.Linux");
     }
 
     #endregion
@@ -90,9 +159,6 @@ public class LinuxPlatformServices : IPlatformServices
 
     /// <summary>
     /// Registers a custom URL protocol handler (e.g., canopy://)
-    /// On Arch Linux, this requires:
-    /// 1. A .desktop file with MimeType=x-scheme-handler/{protocol}
-    /// 2. Registration with xdg-mime
     /// </summary>
     public void RegisterProtocol(string protocol)
     {
@@ -104,136 +170,133 @@ public class LinuxPlatformServices : IPlatformServices
             
             Directory.CreateDirectory(applicationsDir);
             
-            var execPath = Process.GetCurrentProcess().MainModule?.FileName 
-                ?? Path.Combine(AppContext.BaseDirectory, "Canopy.Linux");
-            
-            // Use the main desktop file for protocol handling
+            var execPath = GetExecutablePath();
             var desktopFilePath = Path.Combine(applicationsDir, "canopy.desktop");
+            var iconPath = AppIconManager.GetIconPath() ?? "canopy";
             
-            // Check if desktop file exists and has protocol handler
-            bool needsUpdate = true;
-            if (File.Exists(desktopFilePath))
-            {
-                var content = File.ReadAllText(desktopFilePath);
-                if (content.Contains($"x-scheme-handler/{protocol}"))
-                {
-                    needsUpdate = false;
-                    _logger.Debug($"Protocol {protocol} already registered");
-                }
-            }
+            // Always update the desktop file to ensure it has the protocol handler
+            var desktopEntry = $"""
+                [Desktop Entry]
+                Version=1.0
+                Type=Application
+                Name=Canopy
+                GenericName=Game Overlay
+                Comment=Game overlay and tracking application
+                Exec="{execPath}" %u
+                Icon={iconPath}
+                Terminal=false
+                Categories=Game;Utility;
+                Keywords=games;overlay;tracking;
+                MimeType=x-scheme-handler/{protocol};
+                StartupWMClass=canopy
+                StartupNotify=true
+                """;
             
-            if (needsUpdate)
-            {
-                // Get icon path
-                var iconPath = AppIconManager.GetIconPath() ?? "canopy";
-                
-                var desktopEntry = $"""
-                    [Desktop Entry]
-                    Version=1.0
-                    Type=Application
-                    Name=Canopy
-                    GenericName=Game Overlay
-                    Comment=Game overlay and tracking application
-                    Exec="{execPath}" %u
-                    Icon={iconPath}
-                    Terminal=false
-                    Categories=Game;Utility;
-                    Keywords=games;overlay;tracking;
-                    MimeType=x-scheme-handler/{protocol};
-                    StartupWMClass=canopy
-                    StartupNotify=true
-                    """;
-                
-                File.WriteAllText(desktopFilePath, desktopEntry);
-                _logger.Info($"Desktop entry updated with protocol handler: {desktopFilePath}");
-            }
+            File.WriteAllText(desktopFilePath, desktopEntry);
+            _logger.Info($"Desktop entry written: {desktopFilePath}");
             
             // Register as default handler with xdg-mime
-            try
-            {
-                var process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "xdg-mime",
-                    Arguments = $"default canopy.desktop x-scheme-handler/{protocol}",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                });
-                process?.WaitForExit(5000);
-                
-                if (process?.ExitCode == 0)
-                {
-                    _logger.Info($"Registered as default handler for {protocol}://");
-                }
-                else
-                {
-                    _logger.Warning($"xdg-mime returned exit code: {process?.ExitCode}");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Warning($"xdg-mime failed: {ex.Message}");
-            }
+            RunCommand("xdg-mime", $"default canopy.desktop x-scheme-handler/{protocol}");
             
-            // Also update mimeapps.list directly (more reliable on some systems)
-            try
-            {
-                var mimeappsPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".local", "share", "applications", "mimeapps.list");
-                
-                var mimeapps = File.Exists(mimeappsPath) 
-                    ? File.ReadAllText(mimeappsPath) 
-                    : "[Default Applications]\n";
-                
-                var mimeType = $"x-scheme-handler/{protocol}";
-                var handler = "canopy.desktop";
-                
-                if (!mimeapps.Contains($"{mimeType}="))
-                {
-                    // Add to Default Applications section
-                    if (mimeapps.Contains("[Default Applications]"))
-                    {
-                        mimeapps = mimeapps.Replace(
-                            "[Default Applications]",
-                            $"[Default Applications]\n{mimeType}={handler}");
-                    }
-                    else
-                    {
-                        mimeapps = $"[Default Applications]\n{mimeType}={handler}\n" + mimeapps;
-                    }
-                    
-                    File.WriteAllText(mimeappsPath, mimeapps);
-                    _logger.Debug($"Updated mimeapps.list");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Debug($"Could not update mimeapps.list: {ex.Message}");
-            }
+            // Also update mimeapps.list directly
+            UpdateMimeAppsList(protocol);
             
             // Update desktop database
-            try
-            {
-                var process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = "update-desktop-database",
-                    Arguments = applicationsDir,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                });
-                process?.WaitForExit(5000);
-            }
-            catch { }
+            RunCommand("update-desktop-database", applicationsDir);
             
-            _logger.Info($"Protocol handler registration complete: {protocol}://");
+            _logger.Info($"Protocol handler registered: {protocol}://");
         }
         catch (Exception ex)
         {
             _logger.Error($"Failed to register protocol: {protocol}", ex);
+        }
+    }
+
+    private void UpdateMimeAppsList(string protocol)
+    {
+        try
+        {
+            var mimeappsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local", "share", "applications", "mimeapps.list");
+            
+            var lines = File.Exists(mimeappsPath) 
+                ? File.ReadAllLines(mimeappsPath).ToList() 
+                : new List<string>();
+            
+            var mimeType = $"x-scheme-handler/{protocol}=canopy.desktop";
+            var inDefaultSection = false;
+            var found = false;
+            var defaultSectionIndex = -1;
+            
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (lines[i].Trim() == "[Default Applications]")
+                {
+                    inDefaultSection = true;
+                    defaultSectionIndex = i;
+                }
+                else if (lines[i].StartsWith("["))
+                {
+                    inDefaultSection = false;
+                }
+                else if (inDefaultSection && lines[i].StartsWith($"x-scheme-handler/{protocol}="))
+                {
+                    lines[i] = mimeType;
+                    found = true;
+                    break;
+                }
+            }
+            
+            if (!found)
+            {
+                if (defaultSectionIndex >= 0)
+                {
+                    lines.Insert(defaultSectionIndex + 1, mimeType);
+                }
+                else
+                {
+                    lines.Insert(0, "[Default Applications]");
+                    lines.Insert(1, mimeType);
+                }
+            }
+            
+            File.WriteAllLines(mimeappsPath, lines);
+            _logger.Debug("Updated mimeapps.list");
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug($"Could not update mimeapps.list: {ex.Message}");
+        }
+    }
+
+    private void RunCommand(string command, string arguments)
+    {
+        try
+        {
+            var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = command,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            });
+            process?.WaitForExit(5000);
+            
+            if (process?.ExitCode == 0)
+            {
+                _logger.Debug($"Command succeeded: {command} {arguments}");
+            }
+            else
+            {
+                _logger.Debug($"Command failed ({process?.ExitCode}): {command} {arguments}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug($"Command error: {command} - {ex.Message}");
         }
     }
 
@@ -300,7 +363,7 @@ public class LinuxPlatformServices : IPlatformServices
             _logger.Error("Failed to get primary screen size", ex);
         }
 
-        return (1920, 1080); // Fallback
+        return (1920, 1080);
     }
 
     public IReadOnlyList<ScreenInfo> GetAllScreens()

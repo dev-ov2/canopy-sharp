@@ -102,10 +102,16 @@ public class SettingsWindow : Window
 
         // Auto-update
         var (autoUpdateBox, autoUpdateToggle) = CreateToggleSetting(
-            "Auto-update",
-            "Automatically download and install updates");
+            "Check for Updates",
+            "Check for new versions and notify when available");
         _autoUpdateToggle = autoUpdateToggle;
         mainBox.PackStart(autoUpdateBox, false, false, 0);
+
+        // Check for updates button
+        var checkUpdatesButton = new Button("Check for Updates Now");
+        checkUpdatesButton.Halign = Align.Start;
+        checkUpdatesButton.Clicked += OnCheckUpdatesClicked;
+        mainBox.PackStart(checkUpdatesButton, false, false, 0);
 
         // Separator
         mainBox.PackStart(new Separator(Orientation.Horizontal), false, false, 8);
@@ -289,12 +295,15 @@ public class SettingsWindow : Window
         
         _startWithSystemToggle!.Active = isAutoStartEnabled;
         _startOpenToggle!.Active = settings.StartOpen;
+        _startOpenToggle.Sensitive = isAutoStartEnabled; // Only enable if autostart is enabled
         _autoUpdateToggle!.Active = settings.AutoUpdate;
         _enableOverlayToggle!.Active = settings.EnableOverlay;
         _overlayShortcutEntry!.Text = settings.OverlayToggleShortcut;
         _dragShortcutEntry!.Text = settings.OverlayDragShortcut;
         
         UpdateOverlayControlsState();
+        
+        _logger.Debug($"Settings loaded: AutoStart={isAutoStartEnabled}, StartOpen={settings.StartOpen}, AutoUpdate={settings.AutoUpdate}");
     }
 
     private void UpdateOverlayControlsState()
@@ -464,5 +473,72 @@ public class SettingsWindow : Window
     {
         args.RetVal = true;
         Hide();
+    }
+
+    private async void OnCheckUpdatesClicked(object? sender, EventArgs e)
+    {
+        var button = sender as Button;
+        if (button == null) return;
+        
+        button.Sensitive = false;
+        button.Label = "Checking...";
+        
+        try
+        {
+            var updateService = App.Services.GetRequiredService<LinuxUpdateService>();
+            var updateInfo = await updateService.CheckForUpdatesAsync();
+            
+            if (updateInfo != null)
+            {
+                var dialog = new MessageDialog(
+                    this,
+                    DialogFlags.Modal,
+                    MessageType.Info,
+                    ButtonsType.YesNo,
+                    $"Canopy v{updateInfo.Version} is available.\n\nWould you like to open the download page?");
+                
+                dialog.Title = "Update Available";
+                var response = (ResponseType)dialog.Run();
+                dialog.Destroy();
+                
+                if (response == ResponseType.Yes)
+                {
+                    updateService.OpenReleasePage(updateInfo);
+                }
+            }
+            else
+            {
+                var dialog = new MessageDialog(
+                    this,
+                    DialogFlags.Modal,
+                    MessageType.Info,
+                    ButtonsType.Ok,
+                    "You're running the latest version of Canopy.");
+                
+                dialog.Title = "No Updates";
+                dialog.Run();
+                dialog.Destroy();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Update check failed: {ex.Message}");
+            
+            var dialog = new MessageDialog(
+                this,
+                DialogFlags.Modal,
+                MessageType.Error,
+                ButtonsType.Ok,
+                $"Failed to check for updates:\n{ex.Message}");
+            
+            dialog.Title = "Update Check Failed";
+            dialog.Run();
+            dialog.Destroy();
+        }
+        finally
+        {
+            button.Sensitive = true;
+            button.Label = "Check for Updates Now";
+        }
     }
 }

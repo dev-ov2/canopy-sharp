@@ -175,7 +175,42 @@ public class App : Gtk.Application
             _logger.Info("Game scan complete.");
         });
 
+        // Subscribe to update notifications
+        var updateService = Services.GetRequiredService<LinuxUpdateService>();
+        updateService.UpdateAvailable += OnUpdateAvailable;
+        updateService.UpdateError += (_, error) => _logger.Warning($"Update check error: {error}");
+
         _logger.Info("App startup complete");
+    }
+
+    private void OnUpdateAvailable(object? sender, LinuxUpdateInfo updateInfo)
+    {
+        _logger.Info($"Update available: v{updateInfo.Version}");
+        
+        GLib.Idle.Add(() =>
+        {
+            try
+            {
+                var notificationService = Services.GetRequiredService<INotificationService>();
+                var settings = Services.GetRequiredService<ISettingsService>().Settings;
+
+                if (settings.AutoUpdate)
+                {
+                    // Show notification with download link
+                    _ = notificationService.ShowAsync(
+                        "Update Available",
+                        $"Canopy v{updateInfo.Version} is available. Click to download.");
+                    
+                    // Open the release page
+                    Services.GetRequiredService<LinuxUpdateService>().OpenReleasePage(updateInfo);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to show update notification: {ex.Message}");
+            }
+            return false;
+        });
     }
 
     /// <summary>
@@ -336,6 +371,9 @@ public class App : Gtk.Application
         services.AddSingleton<IPlatformServices>(sp => sp.GetRequiredService<LinuxPlatformServices>());
         services.AddSingleton<ITrayIconService, LinuxTrayIconService>();
         services.AddSingleton<INotificationService, LinuxNotificationService>();
+
+        // Update service
+        services.AddSingleton<LinuxUpdateService>();
 
         services.AddSingleton<LinuxHotkeyService>();
         services.AddSingleton<IHotkeyService>(sp => sp.GetRequiredService<LinuxHotkeyService>());
@@ -526,6 +564,7 @@ public class App : Gtk.Application
         _trayIconService?.Dispose();
         
         Services.GetService<LinuxHotkeyService>()?.Dispose();
+        Services.GetService<LinuxUpdateService>()?.Dispose();
 
         if (_host != null)
         {
