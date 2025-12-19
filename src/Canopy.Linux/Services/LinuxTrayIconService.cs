@@ -12,7 +12,6 @@ namespace Canopy.Linux.Services;
 /// For Arch Linux / CachyOS:
 /// - Requires libayatana-appindicator3 package
 /// - On GNOME, requires gnome-shell-extension-appindicator
-/// - Icons must be in an icon theme or use set_icon_theme_path
 /// </summary>
 public class LinuxTrayIconService : ITrayIconService
 {
@@ -54,9 +53,6 @@ public class LinuxTrayIconService : ITrayIconService
             // Create context menu (required for AppIndicator)
             CreateContextMenu();
 
-            // Add our icon directory to the theme search path
-            AppIconManager.AddToIconTheme();
-
             // Try to initialize AppIndicator
             if (TryInitializeAppIndicator())
             {
@@ -78,12 +74,31 @@ public class LinuxTrayIconService : ITrayIconService
     {
         try
         {
-            // Create AppIndicator with icon name
-            _appIndicator = app_indicator_new(
-                "canopy-app",  // Unique ID
-                AppIconManager.IconName,  // Icon name (without path/extension)
-                0  // Category: ApplicationStatus
-            );
+            // Get icon - AppIndicator can use:
+            // 1. An icon name from the theme (e.g., "firefox")
+            // 2. An absolute path to an icon file
+            var iconPath = AppIconManager.GetIconPath();
+            string iconArg;
+            
+            if (iconPath != null && File.Exists(iconPath))
+            {
+                // Use absolute path - this is the most reliable method
+                // Remove the .png extension as AppIndicator adds it
+                iconArg = iconPath.EndsWith(".png") 
+                    ? iconPath.Substring(0, iconPath.Length - 4) 
+                    : iconPath;
+                _logger.Debug($"Using icon path: {iconArg}");
+            }
+            else
+            {
+                // Fallback to system icon
+                iconArg = "applications-games";
+                _logger.Warning($"Icon not found, using fallback: {iconArg}");
+            }
+
+            // Create AppIndicator
+            // Category 0 = ApplicationStatus
+            _appIndicator = app_indicator_new("canopy", iconArg, 0);
 
             if (_appIndicator == IntPtr.Zero)
             {
@@ -91,30 +106,16 @@ public class LinuxTrayIconService : ITrayIconService
                 return false;
             }
 
-            // Set custom icon theme path if we installed icons there
-            var iconDir = AppIconManager.InstalledIconDirectory;
-            if (iconDir != null)
-            {
-                _logger.Debug($"Setting icon theme path: {iconDir}");
-                app_indicator_set_icon_theme_path(_appIndicator, iconDir);
-            }
-
-            // Set the icon again after setting theme path
-            app_indicator_set_icon_full(_appIndicator, AppIconManager.IconName, "Canopy");
-
-            // Set status to Active
+            // Set status to Active (1)
             app_indicator_set_status(_appIndicator, 1);
             
-            // Set the menu
+            // Set the menu (required)
             if (_contextMenu != null)
             {
                 app_indicator_set_menu(_appIndicator, _contextMenu.Handle);
             }
 
-            // Set title
-            app_indicator_set_title(_appIndicator, "Canopy");
-
-            _logger.Debug($"AppIndicator created with icon: {AppIconManager.IconName}");
+            _logger.Debug("AppIndicator created successfully");
             return true;
         }
         catch (DllNotFoundException ex)
@@ -129,7 +130,7 @@ public class LinuxTrayIconService : ITrayIconService
         }
         catch (Exception ex)
         {
-            _logger.Debug($"AppIndicator initialization failed: {ex.Message}");
+            _logger.Warning($"AppIndicator initialization failed: {ex.Message}");
             return false;
         }
     }
@@ -212,15 +213,22 @@ public class LinuxTrayIconService : ITrayIconService
 
     #region AppIndicator P/Invoke
 
+    // Wrapper functions that try both library variants
     private static IntPtr app_indicator_new(string id, string iconName, int category)
     {
-        try { return ayatana_app_indicator_new(id, iconName, category); }
+        // Try ayatana first (Arch, modern distros)
+        try 
+        { 
+            return ayatana_app_indicator_new(id, iconName, category); 
+        }
         catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
         
-        try { return ubuntu_app_indicator_new(id, iconName, category); }
+        // Try ubuntu/older
+        try 
+        { 
+            return ubuntu_app_indicator_new(id, iconName, category); 
+        }
         catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
         
         return IntPtr.Zero;
     }
@@ -229,94 +237,39 @@ public class LinuxTrayIconService : ITrayIconService
     {
         try { ayatana_app_indicator_set_status(indicator, status); return; }
         catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
         
         try { ubuntu_app_indicator_set_status(indicator, status); }
         catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
     }
 
     private static void app_indicator_set_menu(IntPtr indicator, IntPtr menu)
     {
         try { ayatana_app_indicator_set_menu(indicator, menu); return; }
         catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
         
         try { ubuntu_app_indicator_set_menu(indicator, menu); }
         catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
     }
 
-    private static void app_indicator_set_title(IntPtr indicator, string title)
-    {
-        try { ayatana_app_indicator_set_title(indicator, title); return; }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
-        
-        try { ubuntu_app_indicator_set_title(indicator, title); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
-    }
-
-    private static void app_indicator_set_icon_theme_path(IntPtr indicator, string iconThemePath)
-    {
-        try { ayatana_app_indicator_set_icon_theme_path(indicator, iconThemePath); return; }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
-        
-        try { ubuntu_app_indicator_set_icon_theme_path(indicator, iconThemePath); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
-    }
-
-    private static void app_indicator_set_icon_full(IntPtr indicator, string iconName, string iconDesc)
-    {
-        try { ayatana_app_indicator_set_icon_full(indicator, iconName, iconDesc); return; }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
-        
-        try { ubuntu_app_indicator_set_icon_full(indicator, iconName, iconDesc); }
-        catch (DllNotFoundException) { }
-        catch (EntryPointNotFoundException) { }
-    }
-
-    // Ayatana AppIndicator
-    [DllImport("libayatana-appindicator3.so.1")]
+    // Ayatana AppIndicator (Arch, modern distros)
+    [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_new")]
     private static extern IntPtr ayatana_app_indicator_new(string id, string iconName, int category);
     
-    [DllImport("libayatana-appindicator3.so.1")]
+    [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_status")]
     private static extern void ayatana_app_indicator_set_status(IntPtr indicator, int status);
     
-    [DllImport("libayatana-appindicator3.so.1")]
+    [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
     private static extern void ayatana_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
-    [DllImport("libayatana-appindicator3.so.1")]
-    private static extern void ayatana_app_indicator_set_title(IntPtr indicator, string title);
-
-    [DllImport("libayatana-appindicator3.so.1")]
-    private static extern void ayatana_app_indicator_set_icon_theme_path(IntPtr indicator, string iconThemePath);
-
-    [DllImport("libayatana-appindicator3.so.1")]
-    private static extern void ayatana_app_indicator_set_icon_full(IntPtr indicator, string iconName, string iconDesc);
-
-    // Ubuntu AppIndicator fallback
-    [DllImport("libappindicator3.so.1")]
+    // Ubuntu/older AppIndicator
+    [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_new")]
     private static extern IntPtr ubuntu_app_indicator_new(string id, string iconName, int category);
     
-    [DllImport("libappindicator3.so.1")]
+    [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_status")]
     private static extern void ubuntu_app_indicator_set_status(IntPtr indicator, int status);
     
-    [DllImport("libappindicator3.so.1")]
+    [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
     private static extern void ubuntu_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
-
-    [DllImport("libappindicator3.so.1")]
-    private static extern void ubuntu_app_indicator_set_title(IntPtr indicator, string title);
-
-    [DllImport("libappindicator3.so.1")]
-    private static extern void ubuntu_app_indicator_set_icon_theme_path(IntPtr indicator, string iconThemePath);
-
-    [DllImport("libappindicator3.so.1")]
-    private static extern void ubuntu_app_indicator_set_icon_full(IntPtr indicator, string iconName, string iconDesc);
 
     #endregion
 }
