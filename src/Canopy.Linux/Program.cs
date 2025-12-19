@@ -1,3 +1,4 @@
+using Canopy.Core.Application;
 using Canopy.Core.Logging;
 using Gtk;
 using System.Runtime.InteropServices;
@@ -17,6 +18,42 @@ public class Program
 
     public static int Main(string[] args)
     {
+        // Initialize logging early
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var logDir = Path.Combine(home, ".local", "share", "canopy");
+        Directory.CreateDirectory(logDir);
+        CanopyLoggerFactory.SetLogDirectory(logDir);
+        var logger = CanopyLoggerFactory.CreateLogger<Program>();
+        
+        logger.Info($"Canopy starting with args: {string.Join(" ", args)}");
+
+        // Check for protocol URI
+        string? protocolUri = null;
+        foreach (var arg in args)
+        {
+            if (arg.StartsWith("canopy://"))
+            {
+                protocolUri = arg;
+                logger.Info($"Protocol URI detected: {protocolUri}");
+                break;
+            }
+        }
+
+        // Check single instance BEFORE GTK initialization
+        if (SingleInstanceGuard.IsAnotherInstanceRunning())
+        {
+            logger.Info("Another instance is already running");
+            
+            if (protocolUri != null)
+            {
+                // Send protocol to running instance
+                SendProtocolToRunningInstance(protocolUri, logger);
+            }
+            
+            logger.Info("Exiting second instance");
+            return 0;
+        }
+
         // Set program name BEFORE GTK init - critical for WM_CLASS
         try
         {
@@ -45,5 +82,26 @@ public class Program
         Gtk.Application.Run();
         
         return 0;
+    }
+
+    private static void SendProtocolToRunningInstance(string uri, Canopy.Core.Logging.ICanopyLogger logger)
+    {
+        try
+        {
+            var protocolDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".local", "share", "canopy", "protocol");
+            
+            Directory.CreateDirectory(protocolDir);
+            
+            var filename = Path.Combine(protocolDir, $"protocol_{DateTime.UtcNow.Ticks}.uri");
+            File.WriteAllText(filename, uri);
+            
+            logger.Info($"Wrote protocol file: {filename}");
+        }
+        catch (Exception ex)
+        {
+            logger.Error($"Failed to send protocol to running instance: {ex.Message}");
+        }
     }
 }

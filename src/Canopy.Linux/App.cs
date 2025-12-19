@@ -32,6 +32,7 @@ public class App : Gtk.Application
     private readonly string[]? _commandLineArgs;
     private bool _isInitialized;
     private FileSystemWatcher? _protocolWatcher;
+    private System.Timers.Timer? _protocolPollTimer;
 
     public static IServiceProvider Services { get; private set; } = null!;
 
@@ -41,13 +42,9 @@ public class App : Gtk.Application
         _startMinimized = startMinimized;
         _commandLineArgs = args;
         
-        // Initialize logging
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var logDir = Path.Combine(home, ".local", "share", "canopy");
-        CanopyLoggerFactory.SetLogDirectory(logDir);
-        
+        // Logger should already be initialized by Program.cs
         _logger = CanopyLoggerFactory.CreateLogger<App>();
-        _logger.Info("Canopy Linux starting...");
+        _logger.Debug("App constructor called");
         
         // Set the program name for GTK/GLib - this affects WM_CLASS
         GLib.Global.ProgramName = "canopy";
@@ -73,12 +70,14 @@ public class App : Gtk.Application
         
         if (_mainWindow != null)
         {
+            _logger.Debug("MainWindow exists, showing and activating");
             _mainWindow.ShowAndActivate();
             return;
         }
 
         if (!_isInitialized)
         {
+            _logger.Debug("Not initialized, calling Initialize()");
             Initialize();
         }
     }
@@ -87,27 +86,15 @@ public class App : Gtk.Application
     {
         _isInitialized = true;
         
-        // Ensure single instance
+        // Try to acquire the lock (should succeed since we checked earlier)
         if (!SingleInstanceGuard.TryAcquire())
         {
-            _logger.Warning("Another instance is already running");
-            
-            // Send protocol URI to running instance via file
-            if (_commandLineArgs != null)
-            {
-                foreach (var arg in _commandLineArgs)
-                {
-                    if (arg.StartsWith("canopy://"))
-                    {
-                        SendProtocolToRunningInstance(arg);
-                        break;
-                    }
-                }
-            }
-            
+            _logger.Error("Failed to acquire single instance lock (unexpected)");
             Quit();
             return;
         }
+
+        _logger.Debug("Single instance lock acquired");
 
         // Build host with DI
         _host = Host.CreateDefaultBuilder()
@@ -116,6 +103,7 @@ public class App : Gtk.Application
 
         Services = _host.Services;
         await _host.StartAsync();
+        _logger.Debug("Host started");
 
         // Register protocol handler
         Services.GetRequiredService<LinuxPlatformServices>().RegisterProtocol("canopy");
@@ -131,26 +119,29 @@ public class App : Gtk.Application
         await InitializeStartupRegistration();
 
         // Create windows
+        _logger.Debug("Creating MainWindow...");
         _mainWindow = Services.GetRequiredService<MainWindow>();
         _overlayWindow = Services.GetRequiredService<OverlayWindow>();
         
         AddWindow(_mainWindow);
         AddWindow(_overlayWindow);
+        _logger.Debug("Windows created and added");
 
         if (!_startMinimized)
         {
             _mainWindow.ShowAndActivate();
         }
 
-        // Handle protocol URI from command line args
+        // Handle protocol URI from command line args (first instance with protocol)
         if (_commandLineArgs != null)
         {
             foreach (var arg in _commandLineArgs)
             {
                 if (arg.StartsWith("canopy://") && Uri.TryCreate(arg, UriKind.Absolute, out var uri))
                 {
-                    _logger.Info($"Protocol URI from args: {arg}");
-                    GLib.Idle.Add(() =>
+                    _logger.Info($"Processing protocol URI from args: {arg}");
+                    // Delay slightly to ensure everything is ready
+                    GLib.Timeout.Add(500, () =>
                     {
                         HandleProtocolActivation(uri);
                         return false;
@@ -189,7 +180,6 @@ public class App : Gtk.Application
 
     /// <summary>
     /// Sends a protocol URI to the running instance via a file.
-    /// The running instance watches this directory for new files.
     /// </summary>
     private void SendProtocolToRunningInstance(string uri)
     {
@@ -201,7 +191,7 @@ public class App : Gtk.Application
             var filename = Path.Combine(protocolDir, $"protocol_{DateTime.UtcNow.Ticks}.uri");
             File.WriteAllText(filename, uri);
             
-            _logger.Info($"Sent protocol URI to running instance: {uri}");
+            _logger.Info($"Wrote protocol file: {filename}");
         }
         catch (Exception ex)
         {
@@ -211,6 +201,7 @@ public class App : Gtk.Application
 
     /// <summary>
     /// Starts watching for protocol files from other instances.
+    /// Uses both FileSystemWatcher and polling for reliability.
     /// </summary>
     private void StartProtocolWatcher()
     {
@@ -219,21 +210,52 @@ public class App : Gtk.Application
             var protocolDir = GetProtocolDirectory();
             Directory.CreateDirectory(protocolDir);
             
-            // Clean up any old protocol files
+            // Clean up any old protocol files first, but process them
             foreach (var file in Directory.GetFiles(protocolDir, "*.uri"))
             {
-                try { File.Delete(file); } catch { }
+                try
+                {
+                    var uri = File.ReadAllText(file).Trim();
+                    File.Delete(file);
+                    
+                    if (Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri))
+                    {
+                        _logger.Info($"Found pending protocol file: {uri}");
+                        GLib.Timeout.Add(100, () =>
+                        {
+                            HandleProtocolActivation(parsedUri);
+                            return false;
+                        });
+                    }
+                }
+                catch { }
             }
             
-            _protocolWatcher = new FileSystemWatcher(protocolDir, "*.uri")
+            // Start FileSystemWatcher
+            try
             {
-                NotifyFilter = NotifyFilters.CreationTime | NotifyFilters.FileName
-            };
+                _protocolWatcher = new FileSystemWatcher(protocolDir, "*.uri")
+                {
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.LastWrite
+                };
+                
+                _protocolWatcher.Created += OnProtocolFileCreated;
+                _protocolWatcher.Changed += OnProtocolFileCreated;
+                _protocolWatcher.EnableRaisingEvents = true;
+                
+                _logger.Debug($"FileSystemWatcher started: {protocolDir}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"FileSystemWatcher failed: {ex.Message}, using polling fallback");
+            }
             
-            _protocolWatcher.Created += OnProtocolFileCreated;
-            _protocolWatcher.EnableRaisingEvents = true;
+            // Also use polling as a fallback (FileSystemWatcher can be unreliable on some Linux filesystems)
+            _protocolPollTimer = new System.Timers.Timer(500);
+            _protocolPollTimer.Elapsed += (_, _) => PollForProtocolFiles();
+            _protocolPollTimer.Start();
             
-            _logger.Debug($"Protocol watcher started: {protocolDir}");
+            _logger.Debug("Protocol polling started");
         }
         catch (Exception ex)
         {
@@ -241,33 +263,59 @@ public class App : Gtk.Application
         }
     }
 
-    private void OnProtocolFileCreated(object sender, FileSystemEventArgs e)
+    private void PollForProtocolFiles()
     {
         try
         {
-            // Small delay to ensure file is written
-            Thread.Sleep(50);
+            var protocolDir = GetProtocolDirectory();
+            if (!Directory.Exists(protocolDir)) return;
             
-            if (File.Exists(e.FullPath))
+            foreach (var file in Directory.GetFiles(protocolDir, "*.uri"))
             {
-                var uri = File.ReadAllText(e.FullPath).Trim();
-                File.Delete(e.FullPath);
+                ProcessProtocolFile(file);
+            }
+        }
+        catch
+        {
+            // Ignore polling errors
+        }
+    }
+
+    private void OnProtocolFileCreated(object sender, FileSystemEventArgs e)
+    {
+        _logger.Debug($"Protocol file event: {e.ChangeType} - {e.FullPath}");
+        
+        // Small delay to ensure file is fully written
+        Thread.Sleep(50);
+        ProcessProtocolFile(e.FullPath);
+    }
+
+    private void ProcessProtocolFile(string filePath)
+    {
+        try
+        {
+            if (!File.Exists(filePath)) return;
+            
+            var uri = File.ReadAllText(filePath).Trim();
+            
+            // Try to delete the file
+            try { File.Delete(filePath); }
+            catch { return; } // If we can't delete, another thread is handling it
+            
+            if (Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri))
+            {
+                _logger.Info($"Processing protocol from file: {uri}");
                 
-                if (Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri))
+                GLib.Idle.Add(() =>
                 {
-                    _logger.Info($"Received protocol from another instance: {uri}");
-                    
-                    GLib.Idle.Add(() =>
-                    {
-                        HandleProtocolActivation(parsedUri);
-                        return false;
-                    });
-                }
+                    HandleProtocolActivation(parsedUri);
+                    return false;
+                });
             }
         }
         catch (Exception ex)
         {
-            _logger.Warning($"Error processing protocol file: {ex.Message}");
+            _logger.Warning($"Error processing protocol file {filePath}: {ex.Message}");
         }
     }
 
@@ -323,6 +371,8 @@ public class App : Gtk.Application
             });
 
         _appCoordinator.TokenReady += (_, e) =>
+        {
+            _logger.Info("TokenReady event received, sending to webview");
             GLib.Idle.Add(() =>
             {
                 _ = Services.GetRequiredService<LinuxWebViewIpcBridge>().Send(new Core.IPC.IpcMessage
@@ -332,6 +382,7 @@ public class App : Gtk.Application
                 });
                 return false;
             });
+        };
 
         _appCoordinator.QuitRequested += async (_, _) =>
         {
@@ -433,19 +484,33 @@ public class App : Gtk.Application
 
     private void HandleProtocolActivation(Uri uri)
     {
-        _logger.Info($"Handling protocol: {uri}");
-        _mainWindow?.ShowAndActivate();
+        _logger.Info($"HandleProtocolActivation: {uri}");
+        _logger.Debug($"_mainWindow is null: {_mainWindow == null}");
+        _logger.Debug($"_appCoordinator is null: {_appCoordinator == null}");
+        
+        if (_mainWindow != null)
+        {
+            _mainWindow.ShowAndActivate();
+        }
+        else
+        {
+            _logger.Warning("MainWindow is null in HandleProtocolActivation!");
+        }
 
         if (_appCoordinator != null)
         {
+            _logger.Debug("Calling AppCoordinator.HandleProtocolActivationAsync");
             _ = _appCoordinator.HandleProtocolActivationAsync(uri);
         }
         else
         {
+            _logger.Warning("AppCoordinator is null, falling back to direct token handling");
             var uriString = uri.ToString();
             if (uriString.Contains("#id_token="))
             {
-                _mainWindow?.OnTokenReceived(uriString.Split("#id_token=")[1]);
+                var token = uriString.Split("#id_token=")[1];
+                _logger.Debug($"Extracted token, calling OnTokenReceived");
+                _mainWindow?.OnTokenReceived(token);
             }
         }
     }
@@ -454,6 +519,8 @@ public class App : Gtk.Application
     {
         _logger.Info("Shutting down...");
         
+        _protocolPollTimer?.Stop();
+        _protocolPollTimer?.Dispose();
         _protocolWatcher?.Dispose();
         _appCoordinator?.Dispose();
         _trayIconService?.Dispose();
