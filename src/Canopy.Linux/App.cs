@@ -12,6 +12,7 @@ using Gdk;
 using Gtk;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.Runtime.InteropServices;
 
 namespace Canopy.Linux;
 
@@ -45,9 +46,33 @@ public class App : Gtk.Application
         _logger = CanopyLoggerFactory.CreateLogger<App>();
         _logger.Info("Canopy Linux starting...");
         
+        // Set the program name for GTK/GLib - this affects WM_CLASS
+        GLib.Global.ProgramName = "canopy";
+        
+        // Set prgname which is used by GTK for the window class
+        SetPrgname("canopy");
+        
         // Initialize icon system (finds, installs, and sets default icons)
         AppIconManager.Initialize();
     }
+
+    /// <summary>
+    /// Sets the program name used by GTK for window matching.
+    /// </summary>
+    private static void SetPrgname(string name)
+    {
+        try
+        {
+            g_set_prgname(name);
+        }
+        catch (Exception)
+        {
+            // Ignore if not available
+        }
+    }
+
+    [DllImport("libglib-2.0.so.0")]
+    private static extern void g_set_prgname(string prgname);
 
     protected override void OnActivated()
     {

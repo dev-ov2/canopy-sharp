@@ -236,7 +236,7 @@ public static class AppIconManager
 
     /// <summary>
     /// Creates/updates the desktop entry for proper taskbar/dock integration.
-    /// The StartupWMClass must match what we set with SetWmclass().
+    /// The StartupWMClass must match what we set with g_set_prgname().
     /// </summary>
     private static void InstallDesktopEntry(string iconPath)
     {
@@ -249,8 +249,9 @@ public static class AppIconManager
             var desktopEntryPath = Path.Combine(applicationsDir, "canopy.desktop");
             var execPath = Path.Combine(AppContext.BaseDirectory, "Canopy.Linux");
             
-            // Use the installed icon name (from theme) or fall back to absolute path
-            var iconRef = IconName; // Will look in icon theme
+            // Use absolute path to icon for reliability
+            // Also install to theme, but use absolute path as primary
+            var iconRef = iconPath; // Absolute path is most reliable
             
             var desktopEntry = $@"[Desktop Entry]
 Version=1.0
@@ -269,7 +270,9 @@ StartupNotify=true
 ";
 
             File.WriteAllText(desktopEntryPath, desktopEntry);
-            Logger.Debug($"Desktop entry installed to {desktopEntryPath}");
+            Logger.Debug($"Desktop entry installed: {desktopEntryPath}");
+            Logger.Debug($"Desktop entry Icon={iconRef}");
+            Logger.Debug($"Desktop entry StartupWMClass=canopy");
 
             // Update desktop database
             Task.Run(() =>
