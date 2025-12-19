@@ -29,7 +29,7 @@ public class MainWindow : Window
     private GameStatePayload? _gameStatePayload;
 
 #if DEBUG
-    private const string TargetUrl = "http://localhost:3000?sharp";
+    private const string TargetUrl = "http://192.168.8.145:3000?sharp";
 #else
     private const string TargetUrl = "http://canopy.ovv.gg?sharp";
 #endif

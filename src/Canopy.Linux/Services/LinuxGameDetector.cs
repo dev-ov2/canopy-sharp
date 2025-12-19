@@ -44,7 +44,7 @@ public class LinuxGameDetector : IGameDetector
                         processes.Add(process);
                 }
                 catch
-                {
+                {   
                     // Process may have exited
                 }
             }
@@ -79,8 +79,9 @@ public class LinuxGameDetector : IGameDetector
                 StartTime = GetProcessStartTime(pid)
             };
         }
-        catch
+        catch(Exception ex)
         {
+            _logger.Error("Received error while getting process info!", ex);
             return null;
         }
     }
@@ -283,6 +284,7 @@ public class LinuxGameDetector : IGameDetector
             foreach (var game in _monitoredGames)
             {
                 var isRunning = IsGameRunningCached(game, runningProcesses);
+
                 var wasRunning = _runningGameIds.Contains(game.Id);
 
                 if (isRunning && !wasRunning)
@@ -314,12 +316,16 @@ public class LinuxGameDetector : IGameDetector
             var normalizedPath = NormalizePath(game.InstallPath);
             foreach (var process in processes)
             {
+                if (process.WindowTitle.Contains(normalizedPath)) {
+                    return true;
+                }
                 if (!string.IsNullOrEmpty(process.ExecutablePath) &&
                     IsPathWithinDirectory(process.ExecutablePath, normalizedPath) &&
                     IsNotIgnored(process.ExecutablePath))
                     return true;
             }
         }
+
 
         if (!string.IsNullOrEmpty(game.ExecutablePath))
         {
