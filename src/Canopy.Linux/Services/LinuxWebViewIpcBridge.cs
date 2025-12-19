@@ -1,5 +1,6 @@
 using Canopy.Core.IPC;
 using Canopy.Core.Logging;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using WebKit;
 
@@ -10,7 +11,7 @@ namespace Canopy.Linux.Services;
 /// 
 /// Communication flow:
 /// - JS → Native: window.webkit.messageHandlers.canopy.postMessage(json)
-/// - Native → JS: Calls window.chrome.webview.postMessage shim or dispatches event
+/// - Native → JS: Calls window.chrome.webview._dispatchMessage shim
 /// 
 /// The bridge injects a compatibility shim so the web app can use the same API as WebView2:
 /// - window.chrome.webview.postMessage(message) - sends to native
@@ -122,44 +123,9 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     {
         try
         {
-            string? json = null;
-
-            // Try to extract the string value from the JavaScript result
-            try
-            {
-                var jsResult = args.JsResult;
-                
-                // Use reflection to access the Value property (API varies by binding version)
-                var valueProperty = jsResult.GetType().GetProperty("Value");
-                if (valueProperty != null)
-                {
-                    var jsValue = valueProperty.GetValue(jsResult);
-                    if (jsValue != null)
-                    {
-                        var isStringProp = jsValue.GetType().GetProperty("IsString");
-                        var isString = isStringProp?.GetValue(jsValue) as bool? ?? false;
-                        
-                        if (isString)
-                        {
-                            json = jsValue.ToString();
-                        }
-                    }
-                }
-                
-                // Fallback
-                if (string.IsNullOrEmpty(json))
-                {
-                    var str = jsResult.ToString();
-                    if (!string.IsNullOrEmpty(str) && !str.StartsWith("WebKit."))
-                    {
-                        json = str;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Warning($"Could not extract JS value: {ex.Message}");
-            }
+            // The ScriptMessageReceivedArgs contains a JavascriptResult
+            // We need to extract the string value using the native WebKit API
+            string? json = ExtractJsResultString(args);
 
             if (!string.IsNullOrEmpty(json))
             {
@@ -171,6 +137,71 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
         {
             _logger.Error("Error receiving script message", ex);
         }
+    }
+
+    /// <summary>
+    /// Extracts the string value from a WebKit JavaScript result using native API.
+    /// </summary>
+    private string? ExtractJsResultString(ScriptMessageReceivedArgs args)
+    {
+        try
+        {
+            // Get the JSCValue from the UserContentManager's script message
+            // The args contain a reference to the JavaScript value
+            var jsResult = args.JsResult;
+            
+            // Use the Handle property to get the native pointer
+            var handleProp = jsResult.GetType().GetProperty("Handle");
+            if (handleProp == null)
+            {
+                _logger.Warning("JavascriptResult.Handle property not found");
+                return null;
+            }
+            
+            var handle = (IntPtr)handleProp.GetValue(jsResult)!;
+            if (handle == IntPtr.Zero)
+            {
+                _logger.Warning("JavascriptResult handle is null");
+                return null;
+            }
+
+            // Get the JSCValue from the JavascriptResult
+            var jscValue = webkit_javascript_result_get_js_value(handle);
+            if (jscValue == IntPtr.Zero)
+            {
+                _logger.Warning("JSCValue is null");
+                return null;
+            }
+
+            // Check if it's a string
+            if (jsc_value_is_string(jscValue))
+            {
+                var strPtr = jsc_value_to_string(jscValue);
+                if (strPtr != IntPtr.Zero)
+                {
+                    var result = Marshal.PtrToStringUTF8(strPtr);
+                    g_free(strPtr);
+                    return result;
+                }
+            }
+            else
+            {
+                // Try to convert to JSON string
+                var jsonPtr = jsc_value_to_json(jscValue, 0);
+                if (jsonPtr != IntPtr.Zero)
+                {
+                    var result = Marshal.PtrToStringUTF8(jsonPtr);
+                    g_free(jsonPtr);
+                    return result;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Failed to extract JS value: {ex.Message}");
+        }
+
+        return null;
     }
 
     protected override bool HandleBuiltInMessage(IpcMessage message)
@@ -223,4 +254,23 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
 
         await Task.CompletedTask;
     }
+
+    #region WebKit Native P/Invoke
+
+    [DllImport("libwebkit2gtk-4.0.so.37")]
+    private static extern IntPtr webkit_javascript_result_get_js_value(IntPtr jsResult);
+
+    [DllImport("libjavascriptcoregtk-4.0.so.18")]
+    private static extern bool jsc_value_is_string(IntPtr value);
+
+    [DllImport("libjavascriptcoregtk-4.0.so.18")]
+    private static extern IntPtr jsc_value_to_string(IntPtr value);
+
+    [DllImport("libjavascriptcoregtk-4.0.so.18")]
+    private static extern IntPtr jsc_value_to_json(IntPtr value, uint indent);
+
+    [DllImport("libglib-2.0.so.0")]
+    private static extern void g_free(IntPtr ptr);
+
+    #endregion
 }
