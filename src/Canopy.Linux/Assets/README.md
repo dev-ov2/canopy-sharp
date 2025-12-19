@@ -2,51 +2,54 @@
 
 Place your application icon here:
 
-- `canopy.png` - Application icon (256x256 PNG recommended)
+- `canopy.png` - Application icon (any size 256x256 or larger, e.g., 512x512)
+
+The icon will be automatically scaled to all required sizes (16x16 through 512x512).
 
 ## Required for:
-- Window icon (title bar)
+- Window title bar icon
 - Taskbar/dock icon
-- System tray icon
+- System tray icon (AppIndicator)
 - Desktop entry icon
+- Notification icons
 
-## How to create/obtain the icon:
+## Supported formats:
+- PNG (recommended, supports transparency)
+- Any size 256x256 or larger works best
+- 512x512 is ideal as it scales down well
 
-### Option 1: Copy from Windows build
-If you have the Windows version, copy the icon:
-```bash
-# From the Windows project
-cp ../Canopy.Windows/Assets/canopy.png ./canopy.png
-```
+## How to add the icon:
 
-### Option 2: Generate a placeholder icon
-```bash
-# Using ImageMagick
-convert -size 256x256 xc:#1a1a2e -fill '#4ade80' \
-    -draw "circle 128,128 128,40" \
-    -fill '#1a1a2e' -draw "circle 128,128 128,60" \
-    -fill '#4ade80' -pointsize 80 -gravity center \
-    -annotate +0+0 "C" canopy.png
+Simply copy your `canopy.png` file to this directory (`src/Canopy.Linux/Assets/`).
 
-# Or using a simple colored square
-convert -size 256x256 xc:'#4ade80' canopy.png
-```
-
-### Option 3: Download or create
-Create a 256x256 PNG icon with transparent background and save as `canopy.png`.
-
-## After adding the icon:
-
-The icon will be automatically:
-1. Copied to output during build
-2. Used for all windows in the application
-3. Installed to system icon directories when the app runs
-4. Used for desktop notifications
+The application will automatically:
+1. Find the icon at runtime
+2. Scale it to all required sizes
+3. Install it to `~/.local/share/icons/hicolor/` for system integration
+4. Update the GTK icon cache
 
 ## Troubleshooting
 
 If icons don't appear:
-1. Ensure `canopy.png` exists in this directory
-2. Rebuild the application
-3. Check logs for "icon not found" warnings
-4. On GNOME, you may need the AppIndicator extension for tray icons
+
+1. **Check the icon exists**: `ls -la Assets/canopy.png`
+2. **Check logs**: Look for "icon" or "Found icon" messages in the log file
+3. **Restart after first run**: The first run installs icons; a restart may be needed for the tray
+4. **On GNOME**: Install the AppIndicator extension:
+   ```bash
+   sudo pacman -S gnome-shell-extension-appindicator  # Arch
+   sudo apt install gnome-shell-extension-appindicator  # Ubuntu
+   ```
+5. **Manually refresh icon cache**:
+   ```bash
+   gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
+   ```
+
+## Icon search paths
+
+The application looks for the icon in these locations (in order):
+1. `{app_directory}/Assets/canopy.png` (development/runtime)
+2. `{app_directory}/canopy.png`
+3. `~/.local/share/icons/hicolor/256x256/apps/canopy.png` (installed)
+4. `/usr/share/icons/hicolor/256x256/apps/canopy.png` (system-wide)
+5. `/usr/share/pixmaps/canopy.png`

@@ -19,9 +19,6 @@ public class LinuxTrayIconService : ITrayIconService
     
     // AppIndicator handle
     private IntPtr _appIndicator = IntPtr.Zero;
-    
-    // Keep reference to prevent GC
-    private Gdk.Pixbuf? _iconPixbuf;
 
     public event EventHandler? ShowWindowRequested;
     public event EventHandler? SettingsRequested;
@@ -55,13 +52,21 @@ public class LinuxTrayIconService : ITrayIconService
             // Create context menu first (required for AppIndicator)
             CreateContextMenu();
 
-            // Install icon to standard location
-            var iconName = InstallIcon();
+            // Get icon name from AppIconManager (already installed to system)
+            var iconName = "canopy"; // This matches what AppIconManager.InstallToSystem() creates
+            
+            // Verify icon was installed
+            var iconPath = AppIconManager.GetIconPath();
+            if (iconPath == null)
+            {
+                _logger.Warning("No icon found, tray icon may not display correctly");
+                iconName = "applications-games"; // Fallback
+            }
 
             // Initialize AppIndicator
             if (TryInitializeAppIndicator(iconName))
             {
-                _logger.Info("Tray icon initialized using AppIndicator");
+                _logger.Info($"Tray icon initialized using AppIndicator with icon: {iconName}");
                 return;
             }
             
@@ -72,88 +77,6 @@ public class LinuxTrayIconService : ITrayIconService
         catch (Exception ex)
         {
             _logger.Error("Failed to initialize tray icon", ex);
-        }
-    }
-
-    /// <summary>
-    /// Installs the icon to a location where AppIndicator can find it.
-    /// Returns the icon name (without path/extension) to use.
-    /// </summary>
-    private string InstallIcon()
-    {
-        const string iconName = "canopy-tray";
-        
-        try
-        {
-            var sourceIcon = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            
-            if (!File.Exists(sourceIcon))
-            {
-                _logger.Warning($"Icon not found at {sourceIcon}, using fallback");
-                return "applications-games"; // System fallback icon
-            }
-
-            // AppIndicator looks for icons in standard icon theme directories
-            // Install to user's hicolor theme
-            var iconThemeDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".local", "share", "icons", "hicolor");
-
-            // Install multiple sizes
-            int[] sizes = { 16, 22, 24, 32, 48, 64, 128, 256 };
-            
-            foreach (var size in sizes)
-            {
-                var sizeDir = Path.Combine(iconThemeDir, $"{size}x{size}", "apps");
-                Directory.CreateDirectory(sizeDir);
-                
-                var targetPath = Path.Combine(sizeDir, $"{iconName}.png");
-                
-                // Copy and scale if needed
-                try
-                {
-                    var pixbuf = new Gdk.Pixbuf(sourceIcon);
-                    var scaled = pixbuf.ScaleSimple(size, size, Gdk.InterpType.Bilinear);
-                    scaled?.Save(targetPath, "png");
-                }
-                catch
-                {
-                    // Just copy the original if scaling fails
-                    if (!File.Exists(targetPath))
-                        File.Copy(sourceIcon, targetPath, true);
-                }
-            }
-
-            // Update icon cache
-            try
-            {
-                var process = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "gtk-update-icon-cache",
-                        Arguments = $"-f -t \"{iconThemeDir}\"",
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true
-                    }
-                };
-                process.Start();
-                process.WaitForExit(5000);
-            }
-            catch
-            {
-                // Icon cache update is optional
-            }
-
-            _logger.Debug($"Installed icon as '{iconName}' to {iconThemeDir}");
-            return iconName;
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning($"Failed to install icon: {ex.Message}");
-            return "applications-games";
         }
     }
 
@@ -183,7 +106,7 @@ public class LinuxTrayIconService : ITrayIconService
             // Set title for accessibility
             app_indicator_set_title(_appIndicator, "Canopy");
 
-            _logger.Debug($"AppIndicator created with icon: {iconName}");
+            _logger.Debug($"AppIndicator created successfully");
             return true;
         }
         catch (DllNotFoundException ex)
@@ -234,8 +157,8 @@ public class LinuxTrayIconService : ITrayIconService
     {
         try
         {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            var iconArg = File.Exists(iconPath) ? $"-i \"{iconPath}\"" : "";
+            var iconPath = AppIconManager.GetIconPath();
+            var iconArg = iconPath != null ? $"-i \"{iconPath}\"" : "";
             
             var process = new Process
             {
@@ -261,7 +184,6 @@ public class LinuxTrayIconService : ITrayIconService
     public void SetTooltip(string text)
     {
         // AppIndicator doesn't support dynamic tooltips
-        // The title is set at creation time
     }
 
     private static string EscapeShellArg(string arg)
@@ -276,8 +198,6 @@ public class LinuxTrayIconService : ITrayIconService
 
         _contextMenu?.Dispose();
         _contextMenu = null;
-        _iconPixbuf?.Dispose();
-        _iconPixbuf = null;
 
         _logger.Info("Tray icon disposed");
     }

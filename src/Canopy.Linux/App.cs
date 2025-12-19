@@ -45,43 +45,11 @@ public class App : Gtk.Application
         _logger = CanopyLoggerFactory.CreateLogger<App>();
         _logger.Info("Canopy Linux starting...");
         
-        // Set default application icon early
-        SetDefaultIcon();
-    }
-
-    private void SetDefaultIcon()
-    {
-        try
-        {
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-            if (File.Exists(iconPath))
-            {
-                Gtk.Window.SetDefaultIconFromFile(iconPath);
-                _logger.Debug("Default application icon set");
-            }
-            else
-            {
-                _logger.Warning($"Application icon not found: {iconPath}");
-                // Try to set a fallback icon using IconTheme
-                try
-                {
-                    var theme = Gtk.IconTheme.Default;
-                    var pixbuf = theme.LoadIcon("applications-games", 256, Gtk.IconLookupFlags.UseBuiltin);
-                    if (pixbuf != null)
-                    {
-                        Gtk.Window.DefaultIconList = new[] { pixbuf };
-                    }
-                }
-                catch
-                {
-                    _logger.Debug("Could not load fallback icon");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning($"Failed to set default icon: {ex.Message}");
-        }
+        // Set default application icon early using centralized helper
+        AppIconManager.SetDefaultWindowIcon();
+        
+        // Pre-install icons to system directories for tray icon support
+        AppIconManager.InstallToSystem();
     }
 
     protected override void OnActivated()

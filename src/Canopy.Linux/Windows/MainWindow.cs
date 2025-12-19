@@ -73,41 +73,16 @@ public class MainWindow : Window
 
     private void SetWindowIcon()
     {
-        var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "canopy.png");
-        if (System.IO.File.Exists(iconPath))
+        // Use centralized AppIconManager
+        var pixbuf = AppIconManager.GetPixbuf(256);
+        if (pixbuf != null)
         {
-            try
-            {
-                var pixbuf = new Pixbuf(iconPath);
-                Icon = pixbuf;
-                
-                // Also set as default for the application
-                SetDefaultIconFromFile(iconPath);
-                
-                _logger.Debug("Window icon set successfully");
-            }
-            catch (Exception ex)
-            {
-                _logger.Warning($"Failed to load window icon: {ex.Message}");
-            }
+            Icon = pixbuf;
+            _logger.Debug("Window icon set successfully");
         }
         else
         {
-            _logger.Warning($"Icon file not found: {iconPath}");
-            // Try to use a system icon as fallback
-            try
-            {
-                var theme = IconTheme.Default;
-                var pixbuf = theme.LoadIcon("applications-games", 256, IconLookupFlags.UseBuiltin);
-                if (pixbuf != null)
-                {
-                    Icon = pixbuf;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Debug($"Failed to load fallback icon: {ex.Message}");
-            }
+            _logger.Warning("Could not load window icon");
         }
     }
 
