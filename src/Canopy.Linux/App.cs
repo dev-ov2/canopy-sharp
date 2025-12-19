@@ -436,10 +436,17 @@ public class App : Gtk.Application
         {
             _settingsWindow = new SettingsWindow();
             AddWindow(_settingsWindow);
-            _settingsWindow.DeleteEvent += (_, _) => _settingsWindow = null;
+            _settingsWindow.DeleteEvent += (_, args) => {
+                args.RetVal = true;
+                _settingsWindow.Hide();
+            };
+            _settingsWindow.Hidden += (_, _) => {
+                // Don't null it out - reuse the window
+            };
         }
-        _settingsWindow.ShowAll();
-        _settingsWindow.Present();
+        
+        // Load settings and show
+        _settingsWindow.LoadAndShow();
     }
 
     private async Task InitializeStartupRegistration()

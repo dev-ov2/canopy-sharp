@@ -58,7 +58,11 @@ public abstract class SettingsServiceBase : ISettingsService
     protected SettingsServiceBase()
     {
         _settingsPath = GetSettingsFilePath();
-        EnsureDirectoryExists(Path.GetDirectoryName(_settingsPath)!);
+        var dir = Path.GetDirectoryName(_settingsPath);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            EnsureDirectoryExists(dir);
+        }
         _settings = Load();
         
         System.Diagnostics.Debug.WriteLine($"[SettingsService] Loaded from: {_settingsPath}");
@@ -78,6 +82,11 @@ public abstract class SettingsServiceBase : ISettingsService
         Directory.CreateDirectory(path);
     }
 
+    /// <summary>
+    /// Called after settings are saved. Override for logging.
+    /// </summary>
+    protected virtual void OnSettingsSaved() { }
+
     private AppSettings Load()
     {
         try
@@ -95,7 +104,7 @@ public abstract class SettingsServiceBase : ISettingsService
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to load settings: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to load: {ex.Message}");
         }
 
         System.Diagnostics.Debug.WriteLine($"[SettingsService] Using default settings");
@@ -110,11 +119,12 @@ public abstract class SettingsServiceBase : ISettingsService
             {
                 var json = JsonSerializer.Serialize(_settings, JsonOptions);
                 File.WriteAllText(_settingsPath, json);
+                OnSettingsSaved();
                 System.Diagnostics.Debug.WriteLine($"[SettingsService] Saved settings to: {_settingsPath}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to save settings: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[SettingsService] Failed to save: {ex.Message}");
             }
         }
     }
