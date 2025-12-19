@@ -1,7 +1,7 @@
 using Canopy.Core.IPC;
 using Canopy.Core.Logging;
-using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using WebKit;
 
 namespace Canopy.Linux.Services;
@@ -10,7 +10,7 @@ namespace Canopy.Linux.Services;
 /// WebKitGTK IPC bridge for communication between native C# and web JavaScript.
 /// 
 /// Communication flow:
-/// - JS → Native: window.webkit.messageHandlers.canopy.postMessage(json)
+/// - JS → Native: JavaScript modifies document.title with a special prefix, we poll for it
 /// - Native → JS: Calls window.chrome.webview._dispatchMessage shim
 /// 
 /// The bridge injects a compatibility shim so the web app can use the same API as WebView2:
@@ -22,7 +22,9 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     private readonly ICanopyLogger _logger;
     private readonly LinuxPlatformServices _platformServices;
     private WebView? _webView;
-    private UserContentManager? _contentManager;
+    private string _originalTitle = "";
+    
+    private const string MessagePrefix = "___CANOPY_IPC___:";
 
     public LinuxWebViewIpcBridge(LinuxPlatformServices platformServices)
     {
@@ -36,19 +38,9 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     public void Initialize(WebView webView)
     {
         _webView = webView;
-        _contentManager = webView.UserContentManager;
 
-        if (_contentManager != null)
-        {
-            // Register script message handler - creates window.webkit.messageHandlers.canopy
-            _contentManager.RegisterScriptMessageHandler("canopy");
-            _contentManager.ScriptMessageReceived += OnScriptMessageReceived;
-            _logger.Info("Registered WebKit script message handler 'canopy'");
-        }
-        else
-        {
-            _logger.Warning("UserContentManager is null - IPC will not work");
-        }
+        // Watch for title changes - we use title as a communication channel
+        webView.AddNotification("title", OnTitleChanged);
 
         // Inject the compatibility shim after page loads
         webView.LoadChanged += OnLoadChanged;
@@ -56,152 +48,122 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
         _logger.Info("WebView IPC bridge initialized");
     }
 
+    private void OnTitleChanged(object o, GLib.NotifyArgs args)
+    {
+        try
+        {
+            var title = _webView?.Title;
+            if (string.IsNullOrEmpty(title)) return;
+
+            // Check if this is an IPC message
+            if (title.StartsWith(MessagePrefix))
+            {
+                var json = title.Substring(MessagePrefix.Length);
+                _logger.Debug($"Received IPC: {(json.Length > 100 ? json[..100] + "..." : json)}");
+                
+                // Restore the original title
+                RestoreTitle();
+                
+                // Process the message
+                HandleIncomingMessage(json);
+            }
+            else if (!title.StartsWith("___"))
+            {
+                // Save the real title
+                _originalTitle = title;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("Error processing title change", ex);
+        }
+    }
+
+    private void RestoreTitle()
+    {
+        if (_webView != null && !string.IsNullOrEmpty(_originalTitle))
+        {
+            var script = $"document.title = '{_originalTitle.Replace("'", "\\'")}';";
+            _webView.RunJavascript(script, null, null);
+        }
+    }
+
     private void OnLoadChanged(object? sender, LoadChangedArgs args)
     {
         if (args.LoadEvent == LoadEvent.Finished)
         {
+            // Save the original title
+            _originalTitle = _webView?.Title ?? "";
             InjectCompatibilityShim();
         }
     }
 
     /// <summary>
     /// Injects a shim that makes window.chrome.webview work like WebView2.
-    /// This allows the web app to use the same code for both platforms.
+    /// Uses document.title modification for JS→Native communication.
     /// </summary>
     private void InjectCompatibilityShim()
     {
-        // This shim makes the WebView2 API work on WebKitGTK:
-        // - postMessage routes to window.webkit.messageHandlers.canopy.postMessage
-        // - addEventListener('message', ...) stores handlers that we call from native
-        var script = @"
-(function() {
+        var script = $@"
+(function() {{
     if (window.__canopyBridgeReady) return;
     window.__canopyBridgeReady = true;
 
-    // Storage for message handlers
+    var MESSAGE_PREFIX = '{MessagePrefix}';
     var messageHandlers = [];
+    var originalTitle = document.title;
+    var messageQueue = [];
+    var sending = false;
+
+    function sendNextMessage() {{
+        if (messageQueue.length === 0) {{
+
+            sending = false;
+            document.title = originalTitle;
+            return;
+        }}
+        sending = true;
+        var msg = messageQueue.shift();
+        document.title = MESSAGE_PREFIX + msg;
+        // Give native time to read it
+        setTimeout(sendNextMessage, 10);
+    }}
 
     // Create chrome.webview shim
-    if (!window.chrome) window.chrome = {};
-    window.chrome.webview = {
-        // Send message to native (routes to WebKit handler)
-        postMessage: function(message) {
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.canopy) {
-                var json = typeof message === 'string' ? message : JSON.stringify(message);
-                window.webkit.messageHandlers.canopy.postMessage(json);
-            }
-        },
+    if (!window.chrome) window.chrome = {{}};
+    window.chrome.webview = {{
+        // Send message to native via title change
+        postMessage: function(message) {{
+            var json = typeof message === 'string' ? message : JSON.stringify(message);
+            messageQueue.push(json);
+            if (!sending) sendNextMessage();
+        }},
         // Register handler for messages from native
-        addEventListener: function(event, handler) {
-            if (event === 'message') {
+        addEventListener: function(event, handler) {{
+            if (event === 'message') {{
                 messageHandlers.push(handler);
-            }
-        },
-        removeEventListener: function(event, handler) {
-            if (event === 'message') {
+            }}
+        }},
+        removeEventListener: function(event, handler) {{
+            if (event === 'message') {{
                 var idx = messageHandlers.indexOf(handler);
                 if (idx >= 0) messageHandlers.splice(idx, 1);
-            }
-        },
+            }}
+        }},
         // Called by native code to dispatch messages
-        _dispatchMessage: function(data) {
-            var event = { data: data };
-            messageHandlers.forEach(function(h) {
-                try { h(event); } catch(e) { console.error('Message handler error:', e); }
-            });
-        }
-    };
+        _dispatchMessage: function(data) {{
+            var event = {{ data: data }};
+            messageHandlers.forEach(function(h) {{
+                try {{ h(event); }} catch(e) {{ console.error('Message handler error:', e); }}
+            }});
+        }}
+    }};
 
     console.log('[Canopy] WebView bridge ready');
-})();
+}})();
 ";
         _webView?.RunJavascript(script, null, null);
         _logger.Debug("Compatibility shim injected");
-    }
-
-    private void OnScriptMessageReceived(object? sender, ScriptMessageReceivedArgs args)
-    {
-        try
-        {
-            // The ScriptMessageReceivedArgs contains a JavascriptResult
-            // We need to extract the string value using the native WebKit API
-            string? json = ExtractJsResultString(args);
-
-            if (!string.IsNullOrEmpty(json))
-            {
-                _logger.Debug($"Received from JS: {(json.Length > 100 ? json[..100] + "..." : json)}");
-                HandleIncomingMessage(json);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.Error("Error receiving script message", ex);
-        }
-    }
-
-    /// <summary>
-    /// Extracts the string value from a WebKit JavaScript result using native API.
-    /// </summary>
-    private string? ExtractJsResultString(ScriptMessageReceivedArgs args)
-    {
-        try
-        {
-            // Get the JSCValue from the UserContentManager's script message
-            // The args contain a reference to the JavaScript value
-            var jsResult = args.JsResult;
-            
-            // Use the Handle property to get the native pointer
-            var handleProp = jsResult.GetType().GetProperty("Handle");
-            if (handleProp == null)
-            {
-                _logger.Warning("JavascriptResult.Handle property not found");
-                return null;
-            }
-            
-            var handle = (IntPtr)handleProp.GetValue(jsResult)!;
-            if (handle == IntPtr.Zero)
-            {
-                _logger.Warning("JavascriptResult handle is null");
-                return null;
-            }
-
-            // Get the JSCValue from the JavascriptResult
-            var jscValue = webkit_javascript_result_get_js_value(handle);
-            if (jscValue == IntPtr.Zero)
-            {
-                _logger.Warning("JSCValue is null");
-                return null;
-            }
-
-            // Check if it's a string
-            if (jsc_value_is_string(jscValue))
-            {
-                var strPtr = jsc_value_to_string(jscValue);
-                if (strPtr != IntPtr.Zero)
-                {
-                    var result = Marshal.PtrToStringUTF8(strPtr);
-                    g_free(strPtr);
-                    return result;
-                }
-            }
-            else
-            {
-                // Try to convert to JSON string
-                var jsonPtr = jsc_value_to_json(jscValue, 0);
-                if (jsonPtr != IntPtr.Zero)
-                {
-                    var result = Marshal.PtrToStringUTF8(jsonPtr);
-                    g_free(jsonPtr);
-                    return result;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.Warning($"Failed to extract JS value: {ex.Message}");
-        }
-
-        return null;
     }
 
     protected override bool HandleBuiltInMessage(IpcMessage message)
@@ -229,7 +191,6 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
 
     /// <summary>
     /// Sends a message to the web app by calling the shim's _dispatchMessage function.
-    /// This mimics WebView2's PostWebMessageAsJson behavior.
     /// </summary>
     public override async Task Send(IpcMessage message)
     {
@@ -244,7 +205,7 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
             .Replace("\n", "\\n")
             .Replace("\r", "\\r");
         
-        // Call the shim's dispatch function - same pattern as WebView2's postMessage
+        // Call the shim's dispatch function
         var script = $"if(window.chrome&&window.chrome.webview)window.chrome.webview._dispatchMessage(JSON.parse('{escaped}'));";
         
         Gtk.Application.Invoke((_, _) =>
@@ -254,23 +215,4 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
 
         await Task.CompletedTask;
     }
-
-    #region WebKit Native P/Invoke
-
-    [DllImport("libwebkit2gtk-4.0.so.37")]
-    private static extern IntPtr webkit_javascript_result_get_js_value(IntPtr jsResult);
-
-    [DllImport("libjavascriptcoregtk-4.0.so.18")]
-    private static extern bool jsc_value_is_string(IntPtr value);
-
-    [DllImport("libjavascriptcoregtk-4.0.so.18")]
-    private static extern IntPtr jsc_value_to_string(IntPtr value);
-
-    [DllImport("libjavascriptcoregtk-4.0.so.18")]
-    private static extern IntPtr jsc_value_to_json(IntPtr value, uint indent);
-
-    [DllImport("libglib-2.0.so.0")]
-    private static extern void g_free(IntPtr ptr);
-
-    #endregion
 }
