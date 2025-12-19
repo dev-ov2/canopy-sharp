@@ -26,24 +26,31 @@ sudo apt-get update
 # Install dependencies
 echo -e "${YELLOW}Installing dependencies...${NC}"
 sudo apt-get install -y \
-    dotnet-runtime-8.0 \
     libgtk-3-0 \
     libwebkit2gtk-4.0-37 \
     libnotify-bin \
     xdg-utils \
-    libx11-6
+    libx11-6 \
+    libayatana-appindicator3-1 \
+    gir1.2-ayatanaappindicator3-0.1
 
-# If dotnet-runtime-8.0 is not available, try installing from Microsoft
+# Try to install .NET 8 runtime
 if ! dpkg -l | grep -q dotnet-runtime-8.0; then
-    echo -e "${YELLOW}Installing .NET 8 from Microsoft repository...${NC}"
+    echo -e "${YELLOW}Installing .NET 8 Runtime...${NC}"
     
-    # Add Microsoft package repository
-    wget https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
-    sudo dpkg -i packages-microsoft-prod.deb
-    rm packages-microsoft-prod.deb
-    
-    sudo apt-get update
-    sudo apt-get install -y dotnet-runtime-8.0
+    # Check if we can use Ubuntu's repo
+    if apt-cache show dotnet-runtime-8.0 &>/dev/null; then
+        sudo apt-get install -y dotnet-runtime-8.0
+    else
+        # Add Microsoft package repository
+        echo -e "${YELLOW}Adding Microsoft repository...${NC}"
+        wget https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb
+        sudo dpkg -i /tmp/packages-microsoft-prod.deb
+        rm /tmp/packages-microsoft-prod.deb
+        
+        sudo apt-get update
+        sudo apt-get install -y dotnet-runtime-8.0
+    fi
 fi
 
 # Create installation directory
@@ -130,4 +137,7 @@ echo "  - Searching for 'Canopy' in your application menu"
 echo "  - Running 'canopy' in the terminal"
 echo ""
 echo "To enable autostart, open Canopy Settings and enable 'Start with System'."
+echo ""
+echo -e "${YELLOW}Note:${NC} If the tray icon doesn't appear on GNOME, install the extension:"
+echo "  'AppIndicator and KStatusNotifierItem Support' from extensions.gnome.org"
 echo ""

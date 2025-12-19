@@ -27,7 +27,14 @@ sudo pacman -S --needed --noconfirm \
     webkit2gtk \
     libnotify \
     xdg-utils \
-    libx11
+    libx11 \
+    libayatana-appindicator
+
+# Try to install optional AUR packages
+if command -v yay &> /dev/null; then
+    echo -e "${YELLOW}Installing AUR dependencies...${NC}"
+    yay -S --needed --noconfirm libappindicator-gtk3 2>/dev/null || true
+fi
 
 # Create installation directory
 INSTALL_DIR="$HOME/.local/share/canopy"
@@ -105,4 +112,7 @@ echo "  - Searching for 'Canopy' in your application menu"
 echo "  - Running 'canopy' in the terminal"
 echo ""
 echo "To enable autostart, open Canopy Settings and enable 'Start with System'."
+echo ""
+echo -e "${YELLOW}Note:${NC} If the tray icon doesn't appear, you may need to install"
+echo "a GNOME Shell extension like 'AppIndicator and KStatusNotifierItem Support'."
 echo ""

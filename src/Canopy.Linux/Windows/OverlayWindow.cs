@@ -5,6 +5,7 @@ using Canopy.Linux.Services;
 using Gdk;
 using Gtk;
 using Microsoft.Extensions.DependencyInjection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Window = Gtk.Window;
 using WindowType = Gtk.WindowType;
@@ -39,7 +40,7 @@ public class OverlayWindow : Window
     public bool IsVisible { get; private set; }
     public bool IsDragEnabled => _isDragEnabled;
 
-    public OverlayWindow() : base(WindowType.Popup)
+    public OverlayWindow() : base(WindowType.Toplevel)
     {
         _logger = CanopyLoggerFactory.CreateLogger<OverlayWindow>();
         _ipcBridge = App.Services.GetRequiredService<LinuxWebViewIpcBridge>();
@@ -50,7 +51,9 @@ public class OverlayWindow : Window
 
         SetupWindow();
         SetupUI();
-        RestorePosition();
+        
+        // Set up X11 properties after window is realized
+        Realized += OnRealized;
         
         _logger.Info("OverlayWindow created");
     }
@@ -63,7 +66,8 @@ public class OverlayWindow : Window
         SkipTaskbarHint = true;
         SkipPagerHint = true;
         KeepAbove = true;
-        TypeHint = WindowTypeHint.Utility;
+        AcceptFocus = false; // Don't steal focus from games
+        TypeHint = WindowTypeHint.Dock; // Dock type windows stay on top
         
         // Make window semi-transparent
         AppPaintable = true;
@@ -78,6 +82,28 @@ public class OverlayWindow : Window
         ButtonReleaseEvent += OnButtonRelease;
         MotionNotifyEvent += OnMotionNotify;
         AddEvents((int)(EventMask.ButtonPressMask | EventMask.ButtonReleaseMask | EventMask.PointerMotionMask));
+    }
+
+    private void OnRealized(object? sender, EventArgs args)
+    {
+        // Additional X11 setup to ensure window stays on top
+        RestorePosition();
+        SetStayOnTop();
+    }
+
+    private void SetStayOnTop()
+    {
+        try
+        {
+            // Use GDK to set additional window hints
+            // GTK's KeepAbove property should be sufficient for most compositors
+            // Re-assert it here after the window is realized
+            KeepAbove = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Failed to set stay-on-top properties: {ex.Message}");
+        }
     }
 
     private void SetupUI()
@@ -422,6 +448,8 @@ public class OverlayWindow : Window
         {
             Show();
             Present();
+            KeepAbove = true; // Re-assert on show
+            
             IsVisible = true;
             RestorePosition();
         });

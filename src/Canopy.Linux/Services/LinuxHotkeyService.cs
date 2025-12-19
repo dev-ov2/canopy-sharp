@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Canopy.Core.Input;
 using Canopy.Core.Logging;
@@ -12,13 +11,15 @@ public class LinuxHotkeyService : IHotkeyService
 {
     private readonly ICanopyLogger _logger;
     private readonly Dictionary<int, HotkeyRegistration> _registeredHotkeys = new();
+    private readonly object _lock = new();
     private int _nextHotkeyId = 1;
     private bool _isDisposed;
     private Thread? _keyListenerThread;
-    private CancellationTokenSource? _cancellationTokenSource;
+    private volatile bool _stopRequested;
     
-    // X11 interop
-    private IntPtr _display;
+    // X11 interop - separate display for listener thread
+    private IntPtr _displayMain;
+    private IntPtr _displayListener;
     private IntPtr _rootWindow;
     private bool _x11Available;
 
@@ -29,6 +30,8 @@ public class LinuxHotkeyService : IHotkeyService
     private const uint ControlMask = 1 << 2;  // Control
     private const uint ShiftMask = 1 << 0;  // Shift
     private const uint Mod4Mask = 1 << 6;  // Super/Windows
+    private const uint LockMask = 1 << 1;  // CapsLock
+    private const uint Mod2Mask = 1 << 4;  // NumLock
 
     // X11 Event types
     private const int KeyPress = 2;
@@ -43,15 +46,15 @@ public class LinuxHotkeyService : IHotkeyService
     {
         try
         {
-            _display = XOpenDisplay(IntPtr.Zero);
-            if (_display == IntPtr.Zero)
+            _displayMain = XOpenDisplay(IntPtr.Zero);
+            if (_displayMain == IntPtr.Zero)
             {
                 _logger.Warning("Failed to open X11 display - hotkeys will not work");
                 _x11Available = false;
                 return;
             }
 
-            _rootWindow = XDefaultRootWindow(_display);
+            _rootWindow = XDefaultRootWindow(_displayMain);
             _x11Available = true;
             _logger.Info("X11 hotkey service initialized");
         }
@@ -85,27 +88,36 @@ public class LinuxHotkeyService : IHotkeyService
         {
             var id = _nextHotkeyId++;
             
-            // Grab the key
-            XGrabKey(_display, (int)keycode, modifiers, _rootWindow, true, 1, 1);
+            // Grab the key with various modifier combinations (NumLock, CapsLock)
+            var modCombinations = new uint[] { 0, LockMask, Mod2Mask, LockMask | Mod2Mask };
             
-            // Also grab with NumLock and CapsLock combinations
-            XGrabKey(_display, (int)keycode, modifiers | 2, _rootWindow, true, 1, 1); // NumLock
-            XGrabKey(_display, (int)keycode, modifiers | 16, _rootWindow, true, 1, 1); // CapsLock
-            XGrabKey(_display, (int)keycode, modifiers | 2 | 16, _rootWindow, true, 1, 1); // Both
-
-            _registeredHotkeys[id] = new HotkeyRegistration
+            foreach (var extraMod in modCombinations)
             {
-                Id = id,
-                Keycode = keycode,
-                Modifiers = modifiers,
-                Name = name,
-                Shortcut = shortcut
-            };
+                var result = XGrabKey(_displayMain, (int)keycode, modifiers | extraMod, _rootWindow, false, 1, 1);
+                if (result == 0)
+                {
+                    _logger.Warning($"XGrabKey failed for {shortcut} with mods {modifiers | extraMod}");
+                }
+            }
+            
+            XFlush(_displayMain);
+
+            lock (_lock)
+            {
+                _registeredHotkeys[id] = new HotkeyRegistration
+                {
+                    Id = id,
+                    Keycode = keycode,
+                    Modifiers = modifiers,
+                    Name = name,
+                    Shortcut = shortcut
+                };
+            }
 
             // Start listener thread if not started
             StartListenerThread();
 
-            _logger.Info($"Registered hotkey: {shortcut} ({name})");
+            _logger.Info($"Registered hotkey: {shortcut} ({name}) keycode={keycode} mods={modifiers}");
             return id;
         }
         catch (Exception ex)
@@ -120,54 +132,80 @@ public class LinuxHotkeyService : IHotkeyService
         if (_keyListenerThread != null && _keyListenerThread.IsAlive)
             return;
 
-        _cancellationTokenSource = new CancellationTokenSource();
+        _stopRequested = false;
         _keyListenerThread = new Thread(KeyListenerLoop)
         {
             IsBackground = true,
             Name = "HotkeyListener"
         };
         _keyListenerThread.Start();
+        _logger.Debug("Hotkey listener thread started");
     }
 
     private void KeyListenerLoop()
     {
-        var token = _cancellationTokenSource?.Token ?? CancellationToken.None;
+        // Open separate display connection for this thread
+        _displayListener = XOpenDisplay(IntPtr.Zero);
+        if (_displayListener == IntPtr.Zero)
+        {
+            _logger.Error("Failed to open X11 display for listener thread");
+            return;
+        }
+
+        var rootWindow = XDefaultRootWindow(_displayListener);
         
-        while (!token.IsCancellationRequested && _x11Available)
+        // Select key press events on root window
+        XSelectInput(_displayListener, rootWindow, 1); // KeyPressMask = 1
+        
+        _logger.Debug("Hotkey listener loop started");
+        
+        while (!_stopRequested && _x11Available)
         {
             try
             {
-                if (XPending(_display) > 0)
+                // Use XPending to check for events without blocking
+                while (XPending(_displayListener) > 0 && !_stopRequested)
                 {
-                    var ev = new XEvent();
-                    XNextEvent(_display, ref ev);
+                    var ev = new XKeyEvent();
+                    XNextEvent(_displayListener, ref ev);
 
                     if (ev.type == KeyPress)
                     {
-                        var keycode = ev.xkey.keycode;
-                        var modifiers = ev.xkey.state & (ControlMask | Mod1Mask | ShiftMask | Mod4Mask);
+                        var keycode = ev.keycode;
+                        // Mask out NumLock and CapsLock
+                        var modifiers = ev.state & (ControlMask | Mod1Mask | ShiftMask | Mod4Mask);
 
-                        foreach (var reg in _registeredHotkeys.Values)
+                        _logger.Debug($"Key event: keycode={keycode} state={ev.state} modifiers={modifiers}");
+
+                        lock (_lock)
                         {
-                            if (reg.Keycode == keycode && 
-                                (reg.Modifiers == modifiers || reg.Modifiers == (modifiers & ~(2u | 16u))))
+                            foreach (var reg in _registeredHotkeys.Values)
                             {
-                                _logger.Debug($"Hotkey pressed: {reg.Name}");
-                                HotkeyPressed?.Invoke(this, new HotkeyEventArgs
+                                if (reg.Keycode == keycode && reg.Modifiers == modifiers)
                                 {
-                                    HotkeyId = reg.Id,
-                                    Name = reg.Name,
-                                    Shortcut = reg.Shortcut
-                                });
-                                break;
+                                    _logger.Info($"Hotkey matched: {reg.Name}");
+                                    
+                                    // Dispatch to GTK thread
+                                    var args = new HotkeyEventArgs
+                                    {
+                                        HotkeyId = reg.Id,
+                                        Name = reg.Name,
+                                        Shortcut = reg.Shortcut
+                                    };
+                                    
+                                    GLib.Idle.Add(() =>
+                                    {
+                                        HotkeyPressed?.Invoke(this, args);
+                                        return false;
+                                    });
+                                    break;
+                                }
                             }
                         }
                     }
                 }
-                else
-                {
-                    Thread.Sleep(50); // Avoid busy waiting
-                }
+                
+                Thread.Sleep(10); // Small sleep to avoid busy-waiting
             }
             catch (Exception ex)
             {
@@ -175,6 +213,14 @@ public class LinuxHotkeyService : IHotkeyService
                 Thread.Sleep(100);
             }
         }
+
+        if (_displayListener != IntPtr.Zero)
+        {
+            XCloseDisplay(_displayListener);
+            _displayListener = IntPtr.Zero;
+        }
+        
+        _logger.Debug("Hotkey listener loop ended");
     }
 
     public bool UnregisterHotkey(int id)
@@ -182,31 +228,42 @@ public class LinuxHotkeyService : IHotkeyService
         if (!_x11Available)
             return false;
 
-        if (_registeredHotkeys.TryGetValue(id, out var reg))
+        HotkeyRegistration? reg;
+        lock (_lock)
         {
-            try
-            {
-                XUngrabKey(_display, (int)reg.Keycode, reg.Modifiers, _rootWindow);
-                XUngrabKey(_display, (int)reg.Keycode, reg.Modifiers | 2, _rootWindow);
-                XUngrabKey(_display, (int)reg.Keycode, reg.Modifiers | 16, _rootWindow);
-                XUngrabKey(_display, (int)reg.Keycode, reg.Modifiers | 2 | 16, _rootWindow);
-                
-                _registeredHotkeys.Remove(id);
-                _logger.Info($"Unregistered hotkey: {reg.Name}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logger.Error($"Failed to unregister hotkey {id}", ex);
-            }
+            if (!_registeredHotkeys.TryGetValue(id, out reg))
+                return false;
+            _registeredHotkeys.Remove(id);
         }
 
-        return false;
+        try
+        {
+            var modCombinations = new uint[] { 0, LockMask, Mod2Mask, LockMask | Mod2Mask };
+            foreach (var extraMod in modCombinations)
+            {
+                XUngrabKey(_displayMain, (int)reg.Keycode, reg.Modifiers | extraMod, _rootWindow);
+            }
+            XFlush(_displayMain);
+            
+            _logger.Info($"Unregistered hotkey: {reg.Name}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Failed to unregister hotkey {id}", ex);
+            return false;
+        }
     }
 
     public void UnregisterAll()
     {
-        foreach (var id in _registeredHotkeys.Keys.ToList())
+        List<int> ids;
+        lock (_lock)
+        {
+            ids = _registeredHotkeys.Keys.ToList();
+        }
+        
+        foreach (var id in ids)
         {
             UnregisterHotkey(id);
         }
@@ -221,11 +278,12 @@ public class LinuxHotkeyService : IHotkeyService
             return false;
 
         var parts = shortcut.Split('+');
+        string? keyName = null;
 
         foreach (var part in parts)
         {
-            var trimmed = part.Trim().ToUpperInvariant();
-            switch (trimmed)
+            var trimmed = part.Trim();
+            switch (trimmed.ToUpperInvariant())
             {
                 case "CTRL":
                 case "CONTROL":
@@ -243,21 +301,31 @@ public class LinuxHotkeyService : IHotkeyService
                     modifiers |= Mod4Mask;
                     break;
                 default:
-                    // Convert key name to keycode
-                    var keysym = XStringToKeysym(trimmed.ToLower());
-                    if (keysym != 0)
-                    {
-                        keycode = (uint)XKeysymToKeycode(_display, keysym);
-                    }
-                    else if (trimmed.Length == 1)
-                    {
-                        // Single character
-                        keysym = XStringToKeysym(trimmed.ToLower());
-                        if (keysym != 0)
-                            keycode = (uint)XKeysymToKeycode(_display, keysym);
-                    }
+                    keyName = trimmed;
                     break;
             }
+        }
+
+        if (keyName == null)
+            return false;
+
+        // Try to get keysym - handle various formats
+        var keysym = XStringToKeysym(keyName.ToLower());
+        if (keysym == 0)
+        {
+            // Try uppercase for single letters
+            keysym = XStringToKeysym(keyName.ToUpper());
+        }
+        if (keysym == 0 && keyName.Length == 1)
+        {
+            // For single characters, try the character code
+            keysym = (ulong)keyName.ToLower()[0];
+        }
+        
+        if (keysym != 0)
+        {
+            keycode = (uint)XKeysymToKeycode(_displayMain, keysym);
+            _logger.Debug($"Parsed shortcut {shortcut}: keysym={keysym} keycode={keycode} modifiers={modifiers}");
         }
 
         return keycode != 0 && modifiers != 0;
@@ -268,14 +336,15 @@ public class LinuxHotkeyService : IHotkeyService
         if (_isDisposed) return;
         _isDisposed = true;
 
-        _cancellationTokenSource?.Cancel();
+        _stopRequested = true;
+        _keyListenerThread?.Join(1000);
         
         UnregisterAll();
 
-        if (_display != IntPtr.Zero)
+        if (_displayMain != IntPtr.Zero)
         {
-            XCloseDisplay(_display);
-            _display = IntPtr.Zero;
+            XCloseDisplay(_displayMain);
+            _displayMain = IntPtr.Zero;
         }
 
         _logger.Info("Hotkey service disposed");
@@ -312,7 +381,13 @@ public class LinuxHotkeyService : IHotkeyService
     private static extern int XPending(IntPtr display);
 
     [DllImport("libX11.so.6")]
-    private static extern int XNextEvent(IntPtr display, ref XEvent eventReturn);
+    private static extern int XNextEvent(IntPtr display, ref XKeyEvent eventReturn);
+
+    [DllImport("libX11.so.6")]
+    private static extern int XSelectInput(IntPtr display, IntPtr window, long eventMask);
+
+    [DllImport("libX11.so.6")]
+    private static extern int XFlush(IntPtr display);
 
     [DllImport("libX11.so.6")]
     private static extern ulong XStringToKeysym(string str);
@@ -321,28 +396,23 @@ public class LinuxHotkeyService : IHotkeyService
     private static extern int XKeysymToKeycode(IntPtr display, ulong keysym);
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct XEvent
-    {
-        public int type;
-        public XKeyEvent xkey;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
     private struct XKeyEvent
     {
         public int type;
-        public ulong serial;
-        public bool send_event;
+        public IntPtr serial;
+        public int send_event;
         public IntPtr display;
         public IntPtr window;
         public IntPtr root;
         public IntPtr subwindow;
-        public ulong time;
+        public IntPtr time;
         public int x, y;
         public int x_root, y_root;
         public uint state;
         public uint keycode;
-        public bool same_screen;
+        public int same_screen;
+        // Padding to match X11 event size
+        private readonly IntPtr _pad1, _pad2, _pad3, _pad4;
     }
 
     #endregion
