@@ -90,6 +90,9 @@ public class LinuxPlatformServices : IPlatformServices
 
     /// <summary>
     /// Registers a custom URL protocol handler (e.g., canopy://)
+    /// On Arch Linux, this requires:
+    /// 1. A .desktop file with MimeType=x-scheme-handler/{protocol}
+    /// 2. Registration with xdg-mime
     /// </summary>
     public void RegisterProtocol(string protocol)
     {
@@ -101,33 +104,132 @@ public class LinuxPlatformServices : IPlatformServices
             
             Directory.CreateDirectory(applicationsDir);
             
-            var execPath = Process.GetCurrentProcess().MainModule?.FileName ?? "canopy";
-            var desktopFilePath = Path.Combine(applicationsDir, $"{protocol}-handler.desktop");
+            var execPath = Process.GetCurrentProcess().MainModule?.FileName 
+                ?? Path.Combine(AppContext.BaseDirectory, "Canopy.Linux");
             
-            var desktopEntry = $"""
-                [Desktop Entry]
-                Type=Application
-                Name=Canopy Protocol Handler
-                Exec={execPath} %u
-                Terminal=false
-                NoDisplay=true
-                MimeType=x-scheme-handler/{protocol};
-                """;
+            // Use the main desktop file for protocol handling
+            var desktopFilePath = Path.Combine(applicationsDir, "canopy.desktop");
             
-            File.WriteAllText(desktopFilePath, desktopEntry);
-            
-            // Register with xdg-mime
-            var process = Process.Start(new ProcessStartInfo
+            // Check if desktop file exists and has protocol handler
+            bool needsUpdate = true;
+            if (File.Exists(desktopFilePath))
             {
-                FileName = "xdg-mime",
-                Arguments = $"default {protocol}-handler.desktop x-scheme-handler/{protocol}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            });
-            process?.WaitForExit();
+                var content = File.ReadAllText(desktopFilePath);
+                if (content.Contains($"x-scheme-handler/{protocol}"))
+                {
+                    needsUpdate = false;
+                    _logger.Debug($"Protocol {protocol} already registered");
+                }
+            }
             
-            _logger.Info($"Registered protocol handler: {protocol}");
+            if (needsUpdate)
+            {
+                // Get icon path
+                var iconPath = AppIconManager.GetIconPath() ?? "canopy";
+                
+                var desktopEntry = $"""
+                    [Desktop Entry]
+                    Version=1.0
+                    Type=Application
+                    Name=Canopy
+                    GenericName=Game Overlay
+                    Comment=Game overlay and tracking application
+                    Exec="{execPath}" %u
+                    Icon={iconPath}
+                    Terminal=false
+                    Categories=Game;Utility;
+                    Keywords=games;overlay;tracking;
+                    MimeType=x-scheme-handler/{protocol};
+                    StartupWMClass=canopy
+                    StartupNotify=true
+                    """;
+                
+                File.WriteAllText(desktopFilePath, desktopEntry);
+                _logger.Info($"Desktop entry updated with protocol handler: {desktopFilePath}");
+            }
+            
+            // Register as default handler with xdg-mime
+            try
+            {
+                var process = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "xdg-mime",
+                    Arguments = $"default canopy.desktop x-scheme-handler/{protocol}",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                });
+                process?.WaitForExit(5000);
+                
+                if (process?.ExitCode == 0)
+                {
+                    _logger.Info($"Registered as default handler for {protocol}://");
+                }
+                else
+                {
+                    _logger.Warning($"xdg-mime returned exit code: {process?.ExitCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"xdg-mime failed: {ex.Message}");
+            }
+            
+            // Also update mimeapps.list directly (more reliable on some systems)
+            try
+            {
+                var mimeappsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".local", "share", "applications", "mimeapps.list");
+                
+                var mimeapps = File.Exists(mimeappsPath) 
+                    ? File.ReadAllText(mimeappsPath) 
+                    : "[Default Applications]\n";
+                
+                var mimeType = $"x-scheme-handler/{protocol}";
+                var handler = "canopy.desktop";
+                
+                if (!mimeapps.Contains($"{mimeType}="))
+                {
+                    // Add to Default Applications section
+                    if (mimeapps.Contains("[Default Applications]"))
+                    {
+                        mimeapps = mimeapps.Replace(
+                            "[Default Applications]",
+                            $"[Default Applications]\n{mimeType}={handler}");
+                    }
+                    else
+                    {
+                        mimeapps = $"[Default Applications]\n{mimeType}={handler}\n" + mimeapps;
+                    }
+                    
+                    File.WriteAllText(mimeappsPath, mimeapps);
+                    _logger.Debug($"Updated mimeapps.list");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug($"Could not update mimeapps.list: {ex.Message}");
+            }
+            
+            // Update desktop database
+            try
+            {
+                var process = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "update-desktop-database",
+                    Arguments = applicationsDir,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                });
+                process?.WaitForExit(5000);
+            }
+            catch { }
+            
+            _logger.Info($"Protocol handler registration complete: {protocol}://");
         }
         catch (Exception ex)
         {

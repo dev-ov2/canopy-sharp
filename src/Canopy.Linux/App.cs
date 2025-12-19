@@ -29,11 +29,14 @@ public class App : Gtk.Application
     private OverlayWindow? _overlayWindow;
     private AppCoordinator? _appCoordinator;
     private readonly bool _startMinimized;
-    private static string[]? _commandLineArgs;
+    private readonly string[]? _commandLineArgs;
+    private bool _isInitialized;
+    private FileSystemWatcher? _protocolWatcher;
 
     public static IServiceProvider Services { get; private set; } = null!;
 
-    public App(bool startMinimized = false, string[]? args = null) : base("gg.ovv.canopy", GLib.ApplicationFlags.None)
+    public App(bool startMinimized = false, string[]? args = null) 
+        : base("gg.ovv.canopy", GLib.ApplicationFlags.None)
     {
         _startMinimized = startMinimized;
         _commandLineArgs = args;
@@ -48,27 +51,16 @@ public class App : Gtk.Application
         
         // Set the program name for GTK/GLib - this affects WM_CLASS
         GLib.Global.ProgramName = "canopy";
-        
-        // Set prgname which is used by GTK for the window class
         SetPrgname("canopy");
         
-        // Initialize icon system (finds, installs, and sets default icons)
+        // Initialize icon system
         AppIconManager.Initialize();
     }
 
-    /// <summary>
-    /// Sets the program name used by GTK for window matching.
-    /// </summary>
     private static void SetPrgname(string name)
     {
-        try
-        {
-            g_set_prgname(name);
-        }
-        catch (Exception)
-        {
-            // Ignore if not available
-        }
+        try { g_set_prgname(name); }
+        catch { }
     }
 
     [DllImport("libglib-2.0.so.0")]
@@ -77,6 +69,7 @@ public class App : Gtk.Application
     protected override void OnActivated()
     {
         base.OnActivated();
+        _logger.Debug("OnActivated called");
         
         if (_mainWindow != null)
         {
@@ -84,36 +77,34 @@ public class App : Gtk.Application
             return;
         }
 
-        // Check for protocol args on first activation
-        if (_commandLineArgs != null)
+        if (!_isInitialized)
         {
-            foreach (var arg in _commandLineArgs)
-            {
-                if (arg.StartsWith("canopy://"))
-                {
-                    _logger.Info($"Protocol activation: {arg}");
-                    if (Uri.TryCreate(arg, UriKind.Absolute, out var uri))
-                    {
-                        // Queue for after initialization
-                        GLib.Idle.Add(() =>
-                        {
-                            HandleProtocolActivation(uri);
-                            return false;
-                        });
-                    }
-                }
-            }
+            Initialize();
         }
-
-        Initialize();
     }
 
     private async void Initialize()
     {
+        _isInitialized = true;
+        
         // Ensure single instance
         if (!SingleInstanceGuard.TryAcquire())
         {
             _logger.Warning("Another instance is already running");
+            
+            // Send protocol URI to running instance via file
+            if (_commandLineArgs != null)
+            {
+                foreach (var arg in _commandLineArgs)
+                {
+                    if (arg.StartsWith("canopy://"))
+                    {
+                        SendProtocolToRunningInstance(arg);
+                        break;
+                    }
+                }
+            }
+            
             Quit();
             return;
         }
@@ -133,6 +124,9 @@ public class App : Gtk.Application
         _appCoordinator = Services.GetRequiredService<AppCoordinator>();
         SetupCoordinatorEvents();
 
+        // Start watching for protocol files from other instances
+        StartProtocolWatcher();
+
         // Sync startup registration with settings
         await InitializeStartupRegistration();
 
@@ -146,6 +140,24 @@ public class App : Gtk.Application
         if (!_startMinimized)
         {
             _mainWindow.ShowAndActivate();
+        }
+
+        // Handle protocol URI from command line args
+        if (_commandLineArgs != null)
+        {
+            foreach (var arg in _commandLineArgs)
+            {
+                if (arg.StartsWith("canopy://") && Uri.TryCreate(arg, UriKind.Absolute, out var uri))
+                {
+                    _logger.Info($"Protocol URI from args: {arg}");
+                    GLib.Idle.Add(() =>
+                    {
+                        HandleProtocolActivation(uri);
+                        return false;
+                    });
+                    break;
+                }
+            }
         }
 
         // Initialize tray icon
@@ -175,29 +187,115 @@ public class App : Gtk.Application
         _logger.Info("App startup complete");
     }
 
+    /// <summary>
+    /// Sends a protocol URI to the running instance via a file.
+    /// The running instance watches this directory for new files.
+    /// </summary>
+    private void SendProtocolToRunningInstance(string uri)
+    {
+        try
+        {
+            var protocolDir = GetProtocolDirectory();
+            Directory.CreateDirectory(protocolDir);
+            
+            var filename = Path.Combine(protocolDir, $"protocol_{DateTime.UtcNow.Ticks}.uri");
+            File.WriteAllText(filename, uri);
+            
+            _logger.Info($"Sent protocol URI to running instance: {uri}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error($"Failed to send protocol to running instance: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Starts watching for protocol files from other instances.
+    /// </summary>
+    private void StartProtocolWatcher()
+    {
+        try
+        {
+            var protocolDir = GetProtocolDirectory();
+            Directory.CreateDirectory(protocolDir);
+            
+            // Clean up any old protocol files
+            foreach (var file in Directory.GetFiles(protocolDir, "*.uri"))
+            {
+                try { File.Delete(file); } catch { }
+            }
+            
+            _protocolWatcher = new FileSystemWatcher(protocolDir, "*.uri")
+            {
+                NotifyFilter = NotifyFilters.CreationTime | NotifyFilters.FileName
+            };
+            
+            _protocolWatcher.Created += OnProtocolFileCreated;
+            _protocolWatcher.EnableRaisingEvents = true;
+            
+            _logger.Debug($"Protocol watcher started: {protocolDir}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Failed to start protocol watcher: {ex.Message}");
+        }
+    }
+
+    private void OnProtocolFileCreated(object sender, FileSystemEventArgs e)
+    {
+        try
+        {
+            // Small delay to ensure file is written
+            Thread.Sleep(50);
+            
+            if (File.Exists(e.FullPath))
+            {
+                var uri = File.ReadAllText(e.FullPath).Trim();
+                File.Delete(e.FullPath);
+                
+                if (Uri.TryCreate(uri, UriKind.Absolute, out var parsedUri))
+                {
+                    _logger.Info($"Received protocol from another instance: {uri}");
+                    
+                    GLib.Idle.Add(() =>
+                    {
+                        HandleProtocolActivation(parsedUri);
+                        return false;
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Error processing protocol file: {ex.Message}");
+        }
+    }
+
+    private static string GetProtocolDirectory()
+    {
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".local", "share", "canopy", "protocol");
+    }
+
     private void ConfigureServices(IServiceCollection services)
     {
-        // Core application services
         services.AddSingleton<ISettingsService, LinuxSettingsService>();
         services.AddSingleton<TokenExchangeService>();
         services.AddSingleton<AppCoordinator>();
 
-        // Platform services
         services.AddSingleton<LinuxPlatformServices>();
         services.AddSingleton<IPlatformServices>(sp => sp.GetRequiredService<LinuxPlatformServices>());
         services.AddSingleton<ITrayIconService, LinuxTrayIconService>();
         services.AddSingleton<INotificationService, LinuxNotificationService>();
 
-        // Hotkeys
         services.AddSingleton<LinuxHotkeyService>();
         services.AddSingleton<IHotkeyService>(sp => sp.GetRequiredService<LinuxHotkeyService>());
 
-        // Game detection
         services.AddSingleton<IGameScanner, SteamScanner>();
         services.AddSingleton<IGameDetector, LinuxGameDetector>();
         services.AddSingleton<GameService>();
 
-        // Windows/UI
         services.AddSingleton<MainWindow>();
         services.AddSingleton<OverlayWindow>();
         services.AddSingleton<LinuxWebViewIpcBridge>();
@@ -356,6 +454,7 @@ public class App : Gtk.Application
     {
         _logger.Info("Shutting down...");
         
+        _protocolWatcher?.Dispose();
         _appCoordinator?.Dispose();
         _trayIconService?.Dispose();
         
