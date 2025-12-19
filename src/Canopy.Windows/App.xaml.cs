@@ -2,6 +2,7 @@ using Canopy.Core.Application;
 using Canopy.Core.Auth;
 using Canopy.Core.GameDetection;
 using Canopy.Core.Input;
+using Canopy.Core.Logging;
 using Canopy.Core.Models;
 using Canopy.Core.Notifications;
 using Canopy.Core.Platform;
@@ -23,6 +24,7 @@ namespace Canopy.Windows;
 /// </summary>
 public partial class App : Application
 {
+    private static readonly ICanopyLogger _logger;
     private IHost? _host;
     private ITrayIconService? _trayIconService;
     private MainWindow? _mainWindow;
@@ -32,6 +34,16 @@ public partial class App : Application
     public static IServiceProvider Services { get; private set; } = null!;
     public static MainWindow? MainWindowInstance { get; private set; }
     public static DispatcherQueue DispatcherQueue { get; private set; } = null!;
+
+    static App()
+    {
+        // Initialize logging
+        var appDataPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Canopy");
+        CanopyLoggerFactory.SetLogDirectory(appDataPath);
+        _logger = CanopyLoggerFactory.CreateLogger<App>();
+    }
 
     public App()
     {
@@ -43,11 +55,13 @@ public partial class App : Application
         
         // Subscribe to protocol activations from Program
         Program.ProtocolActivated += OnProtocolActivated;
+        
+        _logger.Info("App initialized");
     }
 
     private void OnProtocolActivated(object? sender, Uri uri)
     {
-        Debug.WriteLine($"Protocol activated: {uri}");
+        _logger.Debug($"Protocol activated: {uri}");
         
         if (DispatcherQueue != null)
         {
@@ -57,7 +71,7 @@ public partial class App : Application
 
     private void HandleProtocolActivation(Uri uri)
     {
-        Debug.WriteLine($"Handling protocol: {uri}");
+        _logger.Debug($"Handling protocol: {uri}");
         MainWindowInstance?.Activate();
         
         if (_appCoordinator != null)
@@ -77,9 +91,7 @@ public partial class App : Application
 
     protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-#if DEBUG
-        Debug.WriteLine("Canopy starting (console attached)");
-#endif
+        _logger.Info("Canopy Windows starting...");
 
         VelopackApp.Build().Run();
         DispatcherQueue = DispatcherQueue.GetForCurrentThread();
@@ -87,6 +99,7 @@ public partial class App : Application
         // Ensure single instance
         if (!SingleInstanceGuard.TryAcquire())
         {
+            _logger.Warning("Another instance is already running");
             var activationArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
             var mainInstance = AppInstance.FindOrRegisterForKey("CanopyMainInstance");
             
@@ -142,9 +155,9 @@ public partial class App : Application
 
         _ = Task.Run(async () =>
         {
-            Debug.WriteLine("Starting game scan...");
+            _logger.Info("Starting game scan...");
             await gameService.ScanAllGamesAsync();
-            Debug.WriteLine("Game scan complete.");
+            _logger.Info("Game scan complete.");
         });
 
         // Subscribe to auto-update notifications
@@ -152,17 +165,17 @@ public partial class App : Application
         updateService.UpdateAvailable += OnUpdateAvailable;
         updateService.UpdateError += OnUpdateError;
         
-        Log($"App startup complete. AutoUpdate={Services.GetRequiredService<ISettingsService>().Settings.AutoUpdate}");
+        _logger.Info($"App startup complete. AutoUpdate={Services.GetRequiredService<ISettingsService>().Settings.AutoUpdate}");
     }
 
     private void OnUpdateError(object? sender, string errorMessage)
     {
-        Log($"Update error received: {errorMessage}");
+        _logger.Error($"Update error received: {errorMessage}");
     }
 
     private void OnUpdateAvailable(object? sender, Services.UpdateInfo updateInfo)
     {
-        Log($"OnUpdateAvailable fired: Version={updateInfo.Version}, IsVelopack={updateInfo.IsVelopackUpdate}");
+        _logger.Info($"OnUpdateAvailable fired: Version={updateInfo.Version}, IsVelopack={updateInfo.IsVelopackUpdate}");
         
         DispatcherQueue.TryEnqueue(async () =>
         {
@@ -171,12 +184,12 @@ public partial class App : Application
                 var notificationService = Services.GetRequiredService<INotificationService>();
                 var settings = Services.GetRequiredService<ISettingsService>().Settings;
 
-                Log($"AutoUpdate setting: {settings.AutoUpdate}");
+                _logger.Debug($"AutoUpdate setting: {settings.AutoUpdate}");
 
                 if (settings.AutoUpdate)
                 {
                     // Auto-update enabled: download silently and notify when ready
-                    Log("Auto-update enabled, starting download...");
+                    _logger.Info("Auto-update enabled, starting download...");
                     await notificationService.ShowAsync(
                         "Update Available",
                         $"Canopy v{updateInfo.Version} is downloading...");
@@ -186,12 +199,11 @@ public partial class App : Application
                         var updateService = Services.GetRequiredService<UpdateService>();
                         await updateService.DownloadAndInstallAsync(updateInfo);
                         // App will restart automatically after download completes
-                        Log("DownloadAndInstallAsync completed");
+                        _logger.Info("DownloadAndInstallAsync completed");
                     }
                     catch (Exception ex)
                     {
-                        Log($"Auto-update download failed: {ex}");
-                        Debug.WriteLine($"Auto-update failed: {ex.Message}");
+                        _logger.Error($"Auto-update download failed", ex);
                         await notificationService.ShowAsync(
                             "Update Failed",
                             "Please update manually from Settings.");
@@ -200,7 +212,7 @@ public partial class App : Application
                 else
                 {
                     // Auto-update disabled: just notify the user
-                    Log("Auto-update disabled, showing notification only");
+                    _logger.Info("Auto-update disabled, showing notification only");
                     await notificationService.ShowAsync(
                         "Update Available",
                         $"Canopy v{updateInfo.Version} is available. Open Settings to update.");
@@ -208,35 +220,14 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                Log($"OnUpdateAvailable exception: {ex}");
+                _logger.Error($"OnUpdateAvailable exception", ex);
             }
         });
     }
 
-    private static void Log(string message)
-    {
-        try
-        {
-            var appDataPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Canopy");
-            Directory.CreateDirectory(appDataPath);
-            var logPath = Path.Combine(appDataPath, "canopy.log");
-            
-            var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-            var logLine = $"[{timestamp}] [App] {message}{Environment.NewLine}";
-            File.AppendAllText(logPath, logLine);
-            Debug.WriteLine($"[App] {message}");
-        }
-        catch
-        {
-            // Don't throw on log failures
-        }
-    }
-
     private void OnGameStarted(object? sender, GameStatePayload payload)
     {
-        Debug.WriteLine($"Game started: {payload.Name}");
+        _logger.Info($"Game started: {payload.Name}");
         DispatcherQueue.TryEnqueue(() =>
         {
             var settings = Services.GetRequiredService<ISettingsService>().Settings;
@@ -251,7 +242,7 @@ public partial class App : Application
 
     private void OnGameStopped(object? sender, GameStatePayload payload)
     {
-        Debug.WriteLine($"Game stopped: {payload.Name}");
+        _logger.Info($"Game stopped: {payload.Name}");
         DispatcherQueue.TryEnqueue(() =>
         {
             Services.GetRequiredService<OverlayWindow>().UpdateGameInfo(null);
@@ -288,6 +279,7 @@ public partial class App : Application
 
         _appCoordinator.QuitRequested += async (_, _) =>
         {
+            _logger.Info("Quit requested");
             await ShutdownAsync();
             Exit();
         };
@@ -343,7 +335,7 @@ public partial class App : Application
         if (isRegistered != settings.StartWithWindows)
         {
             platformServices.SetStartupRegistration(settings.StartWithWindows, settings.StartOpen);
-            Debug.WriteLine($"Startup registration synced: {settings.StartWithWindows}");
+            _logger.Info($"Startup registration synced: {settings.StartWithWindows}");
         }
     }
 
@@ -372,6 +364,7 @@ public partial class App : Application
             }
 
             hotkeyService.HotkeyPressed += OnHotkeyPressed;
+            _logger.Info("Hotkeys registered");
         }
     }
 
@@ -384,11 +377,14 @@ public partial class App : Application
 
     private void OnHotkeyPressed(object? sender, HotkeyEventArgs args)
     {
+        _logger.Debug($"Hotkey pressed: {args.Name}");
         _appCoordinator?.HandleHotkeyPressed(args.Name);
     }
 
     public async Task ShutdownAsync()
     {
+        _logger.Info("Shutting down...");
+        
         _appCoordinator?.Dispose();
         _trayIconService?.Dispose();
         Services.GetService<UpdateService>()?.Dispose();
@@ -400,5 +396,7 @@ public partial class App : Application
         }
 
         SingleInstanceGuard.Release();
+        
+        _logger.Info("Shutdown complete");
     }
 }

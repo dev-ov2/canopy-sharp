@@ -1,3 +1,4 @@
+using Canopy.Core.Logging;
 using Canopy.Core.Models;
 using System.Diagnostics;
 using System.Text.Json;
@@ -9,6 +10,7 @@ namespace Canopy.Core.GameDetection;
 /// </summary>
 public class GameService
 {
+    private readonly ICanopyLogger _logger;
     private readonly IEnumerable<IGameScanner> _scanners;
     private readonly IGameDetector _gameDetector;
     private List<DetectedGame> _cachedGames = [];
@@ -23,23 +25,33 @@ public class GameService
         IEnumerable<IGameScanner> scanners, 
         IGameDetector runningGameDetector)
     {
+        _logger = CanopyLoggerFactory.CreateLogger<GameService>();
         _scanners = scanners;
         _gameDetector = runningGameDetector;
 
-        _gameDetector.GameStarted += (_, game) => GameStarted?.Invoke(this, new GameStatePayload
+        _gameDetector.GameStarted += (_, game) =>
         {
-            State = GameState.Started.ToString().ToLowerInvariant(),
-            Source = game.Platform.ToString().ToLowerInvariant(),
-            AppId = game.Id,
-            Name = game.Name
-        });
-        _gameDetector.GameStopped += (_, game) => GameStopped?.Invoke(this, new GameStatePayload
+            _logger.Info($"Game started: {game.Name} ({game.Platform})");
+            GameStarted?.Invoke(this, new GameStatePayload
+            {
+                State = GameState.Started.ToString().ToLowerInvariant(),
+                Source = game.Platform.ToString().ToLowerInvariant(),
+                AppId = game.Id,
+                Name = game.Name
+            });
+        };
+        
+        _gameDetector.GameStopped += (_, game) =>
         {
-            State = GameState.Stopped.ToString().ToLowerInvariant(),
-            Source = game.Platform.ToString().ToLowerInvariant(),
-            AppId = game.Id,
-            Name = game.Name
-        });
+            _logger.Info($"Game stopped: {game.Name} ({game.Platform})");
+            GameStopped?.Invoke(this, new GameStatePayload
+            {
+                State = GameState.Stopped.ToString().ToLowerInvariant(),
+                Source = game.Platform.ToString().ToLowerInvariant(),
+                AppId = game.Id,
+                Name = game.Name
+            });
+        };
     }
 
     /// <summary>
@@ -48,18 +60,23 @@ public class GameService
     public async Task<IReadOnlyList<DetectedGame>> ScanAllGamesAsync(CancellationToken cancellationToken = default)
     {
         var allGames = new List<DetectedGame>();
+        var availableScanners = _scanners.Where(d => d.IsAvailable).ToList();
+        
+        _logger.Info($"Scanning games with {availableScanners.Count} available scanners");
 
-        var detectionTasks = _scanners
-            .Where(d => d.IsAvailable)
+        var detectionTasks = availableScanners
             .Select(async detector =>
             {
                 try
                 {
-                    return await detector.DetectGamesAsync(cancellationToken);
+                    var games = await detector.DetectGamesAsync(cancellationToken);
+                    _logger.Debug($"{detector.Platform}: Found {games.Count} games");
+                    return games;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    return [];
+                    _logger.Error($"Error scanning {detector.Platform}", ex);
+                    return Array.Empty<DetectedGame>();
                 }
             });
 
@@ -80,6 +97,7 @@ public class GameService
         _cachedGames = allGames;
         _gameDetector.StartMonitoring(allGames);
         
+        _logger.Info($"Game scan complete: {allGames.Count} total games detected");
         GamesDetected?.Invoke(this, allGames.AsReadOnly());
         return allGames.AsReadOnly();
     }
@@ -89,6 +107,7 @@ public class GameService
     /// </summary>
     public Task<IReadOnlyList<DetectedGame>> RescanGamesAsync(CancellationToken cancellationToken = default)
     {
+        _logger.Info("Rescanning games...");
         _gameDetector.StopMonitoring();
         _cachedGames.Clear();
         return ScanAllGamesAsync(cancellationToken);

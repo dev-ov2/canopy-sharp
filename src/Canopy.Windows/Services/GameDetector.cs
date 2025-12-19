@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Canopy.Core.GameDetection;
+using Canopy.Core.Logging;
 using Canopy.Core.Models;
 
 namespace Canopy.Windows.Services;
@@ -11,6 +12,7 @@ namespace Canopy.Windows.Services;
 /// </summary>
 public class GameDetector : IGameDetector
 {
+    private readonly ICanopyLogger _logger;
     private readonly Timer _pollTimer;
     private readonly HashSet<string> _runningGameIds = new();
     private IReadOnlyList<DetectedGame> _monitoredGames = Array.Empty<DetectedGame>();
@@ -34,6 +36,7 @@ public class GameDetector : IGameDetector
 
     public GameDetector()
     {
+        _logger = CanopyLoggerFactory.CreateLogger<GameDetector>();
         _pollTimer = new Timer(PollRunningGames, null, Timeout.Infinite, Timeout.Infinite);
     }
 
@@ -139,7 +142,7 @@ public class GameDetector : IGameDetector
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Error in IsProcessRunningFromPath: {ex.Message}");
+            _logger.Error("Error in IsProcessRunningFromPath", ex);
         }
 
         return false;
@@ -282,18 +285,15 @@ public class GameDetector : IGameDetector
 
     public void StartMonitoring(IEnumerable<DetectedGame> games)
     {
-        Debug.WriteLine($"StartMonitoring called");
-        
         _monitoredGames = games.ToList().AsReadOnly();
         _runningGameIds.Clear();
 
-        Debug.WriteLine($"Monitoring {_monitoredGames.Count} games");
+        _logger.Info($"Starting game monitoring for {_monitoredGames.Count} games");
 
         // Get all process paths once for efficient checking
         var allProcesses = GetAllProcessPaths();
-        Debug.WriteLine($"Found {allProcesses.Count} user processes");
+        _logger.Debug($"Found {allProcesses.Count} user processes");
 
-        Debug.WriteLine($"Starting poll timer. {_runningGameIds.Count} games currently running.");
         _isMonitoring = true;
         _pollTimer.Change(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
     }
@@ -302,6 +302,7 @@ public class GameDetector : IGameDetector
     {
         _isMonitoring = false;
         _pollTimer.Change(Timeout.Infinite, Timeout.Infinite);
+        _logger.Info("Stopped game monitoring");
     }
 
     private void PollRunningGames(object? state)
@@ -320,14 +321,14 @@ public class GameDetector : IGameDetector
 
                 if (isRunning && !wasRunning)
                 {
-                    Debug.WriteLine($"Game STARTED: {game.Name}");
+                    _logger.Info($"Game STARTED: {game.Name}");
                     _runningGameIds.Add(game.Id);
                     game.IsRunning = true;
                     GameStarted?.Invoke(this, game);
                 }
                 else if (!isRunning && wasRunning)
                 {
-                    Debug.WriteLine($"Game STOPPED: {game.Name}");
+                    _logger.Info($"Game STOPPED: {game.Name}");
                     _runningGameIds.Remove(game.Id);
                     game.IsRunning = false;
                     GameStopped?.Invoke(this, game);
@@ -336,7 +337,7 @@ public class GameDetector : IGameDetector
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Error polling running games: {ex.Message}");
+            _logger.Error("Error polling running games", ex);
         }
     }
 

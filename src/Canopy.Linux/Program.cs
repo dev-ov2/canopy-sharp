@@ -1,20 +1,31 @@
+using Canopy.Core.Logging;
+using Gtk;
+
 namespace Canopy.Linux;
 
 /// <summary>
-/// Linux entry point stub
+/// Linux entry point for Canopy application
 /// </summary>
 public class Program
 {
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
-        Console.WriteLine("Canopy Linux - Not yet implemented");
-        Console.WriteLine("This will use GTK# or Avalonia with WebKitGTK for the UI");
+        // Initialize GTK
+        Gtk.Application.Init();
+
+        // Parse command line arguments
+        var startMinimized = args.Contains("--minimized");
+
+        // Create and run the application
+        var app = new App(startMinimized, args);
         
-        // TODO: Implement using one of:
-        // - GTK# with WebKitGTK: https://github.com/AvaloniaSUI/GtkSharp
-        // - Avalonia UI: https://avaloniaui.net/
-        // - Photino: https://www.photino.dev/
+        // Register and activate
+        app.Register(GLib.Cancellable.Current);
+        app.Activate();
         
-        throw new PlatformNotSupportedException("Linux support is not yet implemented");
+        // Run GTK main loop
+        Gtk.Application.Run();
+        
+        return 0;
     }
 }

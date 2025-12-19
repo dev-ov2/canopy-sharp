@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Canopy.Core.Input;
+using Canopy.Core.Logging;
 using Canopy.Windows.Interop;
 using Microsoft.UI.Xaml;
 using Windows.System;
@@ -12,6 +13,7 @@ namespace Canopy.Windows.Services;
 /// </summary>
 public class HotkeyService : IHotkeyService
 {
+    private readonly ICanopyLogger _logger;
     private readonly Dictionary<int, HotkeyRegistration> _registeredHotkeys = new();
     private IntPtr _hwnd;
     private int _nextHotkeyId = 1;
@@ -26,6 +28,11 @@ public class HotkeyService : IHotkeyService
 
     private delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
+    public HotkeyService()
+    {
+        _logger = CanopyLoggerFactory.CreateLogger<HotkeyService>();
+    }
+
     /// <summary>
     /// Initializes the hotkey service with a window handle
     /// Subclasses the window to intercept WM_HOTKEY and forward it to this service.
@@ -35,7 +42,11 @@ public class HotkeyService : IHotkeyService
         if (_isInitialized) return;
         
         _hwnd = WindowNative.GetWindowHandle(window);
-        if (_hwnd == IntPtr.Zero) return;
+        if (_hwnd == IntPtr.Zero)
+        {
+            _logger.Warning("Failed to get window handle for hotkey service");
+            return;
+        }
 
         // Keep delegate alive in a field to prevent GC
         _wndProcDelegate = WndProcHandler;
@@ -44,6 +55,8 @@ public class HotkeyService : IHotkeyService
         var newProcPtr = Marshal.GetFunctionPointerForDelegate(_wndProcDelegate);
         _prevWndProc = NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWLP_WNDPROC, newProcPtr);
         _isInitialized = true;
+        
+        _logger.Info("Hotkey service initialized");
     }
 
     private IntPtr WndProcHandler(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -65,7 +78,10 @@ public class HotkeyService : IHotkeyService
     public int RegisterHotkey(string shortcut, string name)
     {
         if (!TryParseShortcut(shortcut, out var key, out var modifiers))
+        {
+            _logger.Warning($"Failed to parse shortcut: {shortcut}");
             return -1;
+        }
 
         return RegisterHotkey(key, modifiers, name, shortcut);
     }
@@ -106,9 +122,11 @@ public class HotkeyService : IHotkeyService
                 Name = name,
                 Shortcut = shortcut
             };
+            _logger.Info($"Registered hotkey: {shortcut} ({name})");
             return id;
         }
 
+        _logger.Warning($"Failed to register hotkey: {shortcut}");
         return -1;
     }
 
@@ -119,10 +137,11 @@ public class HotkeyService : IHotkeyService
     {
         if (_hwnd == IntPtr.Zero) return false;
 
-        if (_registeredHotkeys.ContainsKey(id))
+        if (_registeredHotkeys.TryGetValue(id, out var reg))
         {
             NativeMethods.UnregisterHotKey(_hwnd, id);
             _registeredHotkeys.Remove(id);
+            _logger.Debug($"Unregistered hotkey: {reg.Name}");
             return true;
         }
 
@@ -141,6 +160,7 @@ public class HotkeyService : IHotkeyService
             NativeMethods.UnregisterHotKey(_hwnd, id);
         }
         _registeredHotkeys.Clear();
+        _logger.Debug("Unregistered all hotkeys");
     }
 
     /// <summary>
@@ -155,6 +175,7 @@ public class HotkeyService : IHotkeyService
     {
         if (_registeredHotkeys.TryGetValue(hotkeyId, out var registration))
         {
+            _logger.Debug($"Hotkey pressed: {registration.Name}");
             HotkeyPressed?.Invoke(this, new HotkeyEventArgs
             {
                 HotkeyId = hotkeyId,
@@ -227,6 +248,8 @@ public class HotkeyService : IHotkeyService
             NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWLP_WNDPROC, _prevWndProc);
             _prevWndProc = IntPtr.Zero;
         }
+        
+        _logger.Info("Hotkey service disposed");
     }
 
     private class HotkeyRegistration
