@@ -1,10 +1,11 @@
 using Canopy.Core.Logging;
+using System.Diagnostics;
 
 namespace Canopy.Linux.Services;
 
 /// <summary>
 /// Centralized helper for managing application icons on Linux.
-/// Handles icon discovery and loading.
+/// Handles icon discovery, loading, and desktop integration.
 /// </summary>
 public static class AppIconManager
 {
@@ -40,8 +41,14 @@ public static class AppIconManager
         Logger.Info($"Found icon: {sourcePath}");
         _cachedIconPath = sourcePath;
 
-        // Set default window icon
-        SetDefaultWindowIcon(sourcePath);
+        // Set default window icon (for all GTK windows)
+        SetDefaultWindowIcons(sourcePath);
+        
+        // Install icon to user's icon theme for desktop integration
+        InstallIconToTheme(sourcePath);
+        
+        // Create/update desktop entry for proper taskbar integration
+        InstallDesktopEntry(sourcePath);
     }
 
     /// <summary>
@@ -63,9 +70,6 @@ public static class AppIconManager
                 ".local", "share", "icons", "hicolor", "256x256", "apps", "canopy.png"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), 
                 ".local", "share", "pixmaps", "canopy.png"),
-            // System locations
-            "/usr/share/icons/hicolor/256x256/apps/canopy.png",
-            "/usr/share/pixmaps/canopy.png",
         };
 
         foreach (var path in searchPaths)
@@ -134,30 +138,165 @@ public static class AppIconManager
     }
 
     /// <summary>
-    /// Sets the default window icon for all GTK windows.
+    /// Sets the default window icons for all GTK windows using multiple sizes.
     /// </summary>
-    private static void SetDefaultWindowIcon(string iconPath)
+    private static void SetDefaultWindowIcons(string iconPath)
     {
         try
         {
-            Gtk.Window.SetDefaultIconFromFile(iconPath);
-            Logger.Debug("Default window icon set");
+            var original = new Gdk.Pixbuf(iconPath);
+            var sizes = new[] { 16, 32, 48, 64, 128, 256 };
+            var iconList = new List<Gdk.Pixbuf>();
+            
+            foreach (var size in sizes)
+            {
+                var scaled = original.ScaleSimple(size, size, Gdk.InterpType.Bilinear);
+                if (scaled != null)
+                {
+                    iconList.Add(scaled);
+                }
+            }
+
+            if (iconList.Count > 0)
+            {
+                Gtk.Window.DefaultIconList = iconList.ToArray();
+                Logger.Debug($"Default window icons set with {iconList.Count} sizes");
+            }
         }
         catch (Exception ex)
         {
-            Logger.Warning($"Failed to set window icon: {ex.Message}");
+            Logger.Warning($"Failed to set default window icons: {ex.Message}");
             
-            // Try loading as pixbuf
+            // Fallback to single file
             try
             {
-                var pixbuf = new Gdk.Pixbuf(iconPath);
-                Gtk.Window.DefaultIconList = new[] { pixbuf };
-                Logger.Debug("Default window icon set from pixbuf");
+                Gtk.Window.SetDefaultIconFromFile(iconPath);
             }
-            catch (Exception ex2)
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Installs the icon to the user's hicolor icon theme.
+    /// </summary>
+    private static void InstallIconToTheme(string sourcePath)
+    {
+        try
+        {
+            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var iconThemeDir = Path.Combine(homeDir, ".local", "share", "icons", "hicolor");
+            
+            var original = new Gdk.Pixbuf(sourcePath);
+            var sizes = new[] { 16, 22, 24, 32, 48, 64, 128, 256, 512 };
+            
+            foreach (var size in sizes)
             {
-                Logger.Warning($"Failed to set window icon from pixbuf: {ex2.Message}");
+                try
+                {
+                    var sizeDir = Path.Combine(iconThemeDir, $"{size}x{size}", "apps");
+                    Directory.CreateDirectory(sizeDir);
+                    
+                    var targetPath = Path.Combine(sizeDir, $"{IconName}.png");
+                    var scaled = original.ScaleSimple(size, size, Gdk.InterpType.Bilinear);
+                    scaled?.Save(targetPath, "png");
+                }
+                catch { }
             }
+
+            // Update icon cache (don't wait for it)
+            Task.Run(() =>
+            {
+                try
+                {
+                    var process = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "gtk-update-icon-cache",
+                            Arguments = $"-f -t \"{iconThemeDir}\"",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            CreateNoWindow = true
+                        }
+                    };
+                    process.Start();
+                    process.WaitForExit(5000);
+                }
+                catch { }
+            });
+
+            Logger.Debug("Icons installed to hicolor theme");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"Failed to install icons to theme: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Creates/updates the desktop entry for proper taskbar/dock integration.
+    /// The StartupWMClass must match what we set with SetWmclass().
+    /// </summary>
+    private static void InstallDesktopEntry(string iconPath)
+    {
+        try
+        {
+            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var applicationsDir = Path.Combine(homeDir, ".local", "share", "applications");
+            Directory.CreateDirectory(applicationsDir);
+            
+            var desktopEntryPath = Path.Combine(applicationsDir, "canopy.desktop");
+            var execPath = Path.Combine(AppContext.BaseDirectory, "Canopy.Linux");
+            
+            // Use the installed icon name (from theme) or fall back to absolute path
+            var iconRef = IconName; // Will look in icon theme
+            
+            var desktopEntry = $@"[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Canopy
+GenericName=Game Overlay
+Comment=Game overlay and tracking application
+Exec=""{execPath}"" %u
+Icon={iconRef}
+Terminal=false
+Categories=Game;Utility;
+Keywords=games;overlay;tracking;
+MimeType=x-scheme-handler/canopy;
+StartupWMClass=canopy
+StartupNotify=true
+";
+
+            File.WriteAllText(desktopEntryPath, desktopEntry);
+            Logger.Debug($"Desktop entry installed to {desktopEntryPath}");
+
+            // Update desktop database
+            Task.Run(() =>
+            {
+                try
+                {
+                    var process = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "update-desktop-database",
+                            Arguments = $"\"{applicationsDir}\"",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            CreateNoWindow = true
+                        }
+                    };
+                    process.Start();
+                    process.WaitForExit(5000);
+                }
+                catch { }
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"Failed to install desktop entry: {ex.Message}");
         }
     }
 }
