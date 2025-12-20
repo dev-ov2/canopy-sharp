@@ -28,10 +28,10 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore src/Canopy.Windows
+        run: dotnet restore src/Canopy.Windows -r win-x64
 
       - name: Build
-        run: dotnet build src/Canopy.Windows -c Release --no-restore
+        run: dotnet build src/Canopy.Windows -c Release -r win-x64 --no-restore
 
   build-linux:
     runs-on: ubuntu-latest
