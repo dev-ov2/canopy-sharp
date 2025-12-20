@@ -41,7 +41,7 @@ public class LinuxUpdateService : IDisposable
         _httpClient.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
         _httpClient.Timeout = TimeSpan.FromSeconds(30);
 
-        CurrentVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
+        CurrentVersion = GetCurrentVersion();
         _logger.Info($"LinuxUpdateService initialized. CurrentVersion: {CurrentVersion}");
 
         // Check for updates every 4 hours (starting after 1 minute)
@@ -50,6 +50,38 @@ public class LinuxUpdateService : IDisposable
             null,
             TimeSpan.FromMinutes(1),
             TimeSpan.FromHours(4));
+    }
+
+    /// <summary>
+    /// Gets the current application version.
+    /// Uses InformationalVersion (set by -p:Version in build) or falls back to AssemblyVersion.
+    /// </summary>
+    private static Version GetCurrentVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        
+        // Try InformationalVersion first (set by -p:Version during build)
+        var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrEmpty(infoVersion))
+        {
+            // InformationalVersion may contain suffix like "1.0.0+abc123" or "1.0.0-beta"
+            // Extract just the version part
+            var versionPart = infoVersion.Split('+', '-')[0];
+            if (Version.TryParse(versionPart, out var parsedVersion))
+            {
+                return parsedVersion;
+            }
+        }
+
+        // Try FileVersion
+        var fileVersion = assembly.GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version;
+        if (!string.IsNullOrEmpty(fileVersion) && Version.TryParse(fileVersion, out var fv))
+        {
+            return fv;
+        }
+
+        // Fallback to AssemblyVersion
+        return assembly.GetName().Version ?? new Version(1, 0, 0);
     }
 
     /// <summary>

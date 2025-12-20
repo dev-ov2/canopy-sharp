@@ -29,7 +29,7 @@ public sealed partial class MainWindow : Window
 #if DEBUG
     private const string TargetUrl = "http://localhost:3000?sharp";
 #else
-    private const string TargetUrl = "http://canopy.ovv.gg?sharp";
+    private const string TargetUrl = "https://canopy.ovv.gg?sharp";
 #endif
 
     private const int MinWidth = 1170;
@@ -122,12 +122,15 @@ public sealed partial class MainWindow : Window
             ConfigureWebViewSettings();
             _ipcBridge.Initialize(WebView.CoreWebView2);
 
+            Debug.WriteLine($"Navigating to: {TargetUrl}");
             WebView.Source = new Uri(TargetUrl);
             WebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+            WebView.CoreWebView2.NavigationStarting += OnNavigationStarting;
             WebView.CoreWebView2.NewWindowRequested += OnNewWindowRequested;
         }
         catch (Exception ex)
         {
+            Debug.WriteLine($"WebView initialization failed: {ex.Message}");
             LoadingOverlay.Visibility = Visibility.Visible;
             var errorText = new TextBlock
             {
@@ -161,15 +164,28 @@ public sealed partial class MainWindow : Window
         settings.IsScriptEnabled = true;
     }
 
+    private void OnNavigationStarting(
+        Microsoft.Web.WebView2.Core.CoreWebView2 sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2NavigationStartingEventArgs args)
+    {
+        Debug.WriteLine($"Navigation starting: {args.Uri}");
+    }
+
     private void OnNavigationCompleted(
         Microsoft.Web.WebView2.Core.CoreWebView2 sender,
         Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs args)
     {
+        Debug.WriteLine($"Navigation completed. Success: {args.IsSuccess}, Status: {args.HttpStatusCode}");
+        
         if (args.IsSuccess)
         {
             LoadingOverlay.Visibility = Visibility.Collapsed;
             WebView.Visibility = Visibility.Visible;
             SendInitialData();
+        }
+        else
+        {
+            Debug.WriteLine($"Navigation failed with error: {args.WebErrorStatus}");
         }
     }
 
@@ -199,7 +215,7 @@ public sealed partial class MainWindow : Window
         },
         TimeSpan.FromSeconds(10));
 
-        if (ack != null)
+        if (ack != null && _gameStatePayload != null)
         {
             App.DispatcherQueue.TryEnqueue(async () => await _ipcBridge.Send(new IpcMessage
             {
@@ -230,25 +246,33 @@ public sealed partial class MainWindow : Window
     private void OnGameStarted(object? sender, GameStatePayload payload)
     {
         _gameStatePayload = payload;
-        if (_isInitialized)
+        
+        // Dispatch to UI thread - this is critical!
+        App.DispatcherQueue.TryEnqueue(async () =>
         {
-        App.DispatcherQueue.TryEnqueue(async () => await _ipcBridge.Send(new IpcMessage
-        {
-            Type = IpcMessageTypes.GameStateUpdate,
-            Payload = payload
-        }));
-        }
-        ShowAndActivate();
+            if (_isInitialized)
+            {
+                await _ipcBridge.Send(new IpcMessage
+                {
+                    Type = IpcMessageTypes.GameStateUpdate,
+                    Payload = payload
+                });
+            }
+        });
+        // Note: Don't call ShowAndActivate() here - let the user control the window
     }
 
     private void OnGameStopped(object? sender, GameStatePayload payload)
     {
         _gameStatePayload = payload;
-        App.DispatcherQueue.TryEnqueue(async () => await _ipcBridge.Send(new IpcMessage
+        App.DispatcherQueue.TryEnqueue(async () =>
         {
-            Type = IpcMessageTypes.GameStateUpdate,
-            Payload = payload
-        }));
+            await _ipcBridge.Send(new IpcMessage
+            {
+                Type = IpcMessageTypes.GameStateUpdate,
+                Payload = payload
+            });
+        });
     }
 
     /// <summary>
@@ -298,11 +322,24 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Shows and activates the window.
+    /// Must be called from UI thread.
     /// </summary>
     public void ShowAndActivate()
     {
-        _appWindow?.Show();
-        Activate();
+        // Ensure we're on the UI thread
+        if (App.DispatcherQueue.HasThreadAccess)
+        {
+            _appWindow?.Show();
+            Activate();
+        }
+        else
+        {
+            App.DispatcherQueue.TryEnqueue(() =>
+            {
+                _appWindow?.Show();
+                Activate();
+            });
+        }
     }
 
     /// <summary>

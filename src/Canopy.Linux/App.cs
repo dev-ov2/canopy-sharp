@@ -83,101 +83,151 @@ public class App : Gtk.Application
 
     private async void Initialize()
     {
-        _isInitialized = true;
-        
-        // Try to acquire the lock (should succeed since we checked earlier)
-        if (!SingleInstanceGuard.TryAcquire())
+        try
         {
-            _logger.Error("Failed to acquire single instance lock (unexpected)");
-            Quit();
-            return;
-        }
-
-        _logger.Debug("Single instance lock acquired");
-
-        // Build host with DI
-        _host = Host.CreateDefaultBuilder()
-            .ConfigureServices(ConfigureServices)
-            .Build();
-
-        Services = _host.Services;
-        await _host.StartAsync();
-        _logger.Debug("Host started");
-
-        // Register protocol handler
-        Services.GetRequiredService<LinuxPlatformServices>().RegisterProtocol("canopy");
-
-        // Initialize coordinator and wire up events
-        _appCoordinator = Services.GetRequiredService<AppCoordinator>();
-        SetupCoordinatorEvents();
-
-        // Start watching for protocol files from other instances
-        StartProtocolWatcher();
-
-        // Sync startup registration with settings
-        await InitializeStartupRegistration();
-
-        // Create windows
-        _logger.Debug("Creating MainWindow...");
-        _mainWindow = Services.GetRequiredService<MainWindow>();
-        
-        AddWindow(_mainWindow);
-        _logger.Debug("Window created and added");
-
-        if (!_startMinimized)
-        {
-            _mainWindow.ShowAndActivate();
-        }
-
-        // Handle protocol URI from command line args (first instance with protocol)
-        if (_commandLineArgs != null)
-        {
-            foreach (var arg in _commandLineArgs)
+            _isInitialized = true;
+            
+            // Try to acquire the lock (should succeed since we checked earlier)
+            if (!SingleInstanceGuard.TryAcquire())
             {
-                if (arg.StartsWith("canopy://") && Uri.TryCreate(arg, UriKind.Absolute, out var uri))
+                _logger.Error("Failed to acquire single instance lock (unexpected)");
+                Quit();
+                return;
+            }
+
+            _logger.Debug("Single instance lock acquired");
+
+            // Build host with DI
+            _host = Host.CreateDefaultBuilder()
+                .ConfigureServices(ConfigureServices)
+                .Build();
+
+            Services = _host.Services;
+            await _host.StartAsync();
+            _logger.Debug("Host started");
+
+            // Register protocol handler
+            try
+            {
+                Services.GetRequiredService<LinuxPlatformServices>().RegisterProtocol("canopy");
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to register protocol handler: {ex.Message}");
+            }
+
+            // Initialize coordinator and wire up events
+            _appCoordinator = Services.GetRequiredService<AppCoordinator>();
+            SetupCoordinatorEvents();
+
+            // Start watching for protocol files from other instances
+            StartProtocolWatcher();
+
+            // Sync startup registration with settings
+            try
+            {
+                await InitializeStartupRegistration();
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to sync startup registration: {ex.Message}");
+            }
+
+            // Create windows
+            _logger.Debug("Creating MainWindow...");
+            _mainWindow = Services.GetRequiredService<MainWindow>();
+            
+            AddWindow(_mainWindow);
+            _logger.Debug("Window created and added");
+
+            if (!_startMinimized)
+            {
+                _mainWindow.ShowAndActivate();
+            }
+
+            // Handle protocol URI from command line args (first instance with protocol)
+            if (_commandLineArgs != null)
+            {
+                foreach (var arg in _commandLineArgs)
                 {
-                    _logger.Info($"Processing protocol URI from args: {arg}");
-                    // Delay slightly to ensure everything is ready
-                    GLib.Timeout.Add(500, () =>
+                    if (arg.StartsWith("canopy://") && Uri.TryCreate(arg, UriKind.Absolute, out var uri))
                     {
-                        HandleProtocolActivation(uri);
-                        return false;
-                    });
-                    break;
+                        _logger.Info($"Processing protocol URI from args: {arg}");
+                        GLib.Timeout.Add(500, () =>
+                        {
+                            HandleProtocolActivation(uri);
+                            return false;
+                        });
+                        break;
+                    }
                 }
             }
+
+            // Initialize tray icon
+            try
+            {
+                _trayIconService = Services.GetRequiredService<ITrayIconService>();
+                _trayIconService.Initialize();
+                _trayIconService.ShowWindowRequested += (_, _) => _appCoordinator.RequestShowWindow();
+                _trayIconService.SettingsRequested += (_, _) => _appCoordinator.RequestShowSettings();
+                _trayIconService.RescanGamesRequested += async (_, _) => await _appCoordinator.RequestRescanGamesAsync();
+                _trayIconService.QuitRequested += (_, _) => _appCoordinator.RequestQuit();
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to initialize tray icon: {ex.Message}");
+            }
+
+            // Register hotkeys
+            try
+            {
+                RegisterHotkeys();
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to register hotkeys: {ex.Message}");
+            }
+            
+            Services.GetRequiredService<ISettingsService>().SettingsChanged += OnSettingsChanged;
+
+            // Start game detection
+            var gameService = Services.GetRequiredService<GameService>();
+            gameService.GameStarted += OnGameStarted;
+            gameService.GameStopped += OnGameStopped;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    _logger.Info("Starting game scan...");
+                    await gameService.ScanAllGamesAsync();
+                    _logger.Info("Game scan complete.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error("Game scan failed", ex);
+                }
+            });
+
+            // Subscribe to update notifications
+            try
+            {
+                var updateService = Services.GetRequiredService<LinuxUpdateService>();
+                updateService.UpdateAvailable += OnUpdateAvailable;
+                updateService.UpdateError += (_, error) => _logger.Warning($"Update check error: {error}");
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to initialize update service: {ex.Message}");
+            }
+
+            _logger.Info("App startup complete");
         }
-
-        // Initialize tray icon
-        _trayIconService = Services.GetRequiredService<ITrayIconService>();
-        _trayIconService.Initialize();
-        _trayIconService.ShowWindowRequested += (_, _) => _appCoordinator.RequestShowWindow();
-        _trayIconService.SettingsRequested += (_, _) => _appCoordinator.RequestShowSettings();
-        _trayIconService.RescanGamesRequested += async (_, _) => await _appCoordinator.RequestRescanGamesAsync();
-        _trayIconService.QuitRequested += (_, _) => _appCoordinator.RequestQuit();
-
-        // Register hotkeys
-        RegisterHotkeys();
-        Services.GetRequiredService<ISettingsService>().SettingsChanged += OnSettingsChanged;
-
-        // Start game detection
-        var gameService = Services.GetRequiredService<GameService>();
-        gameService.GameStarted += OnGameStarted;
-        gameService.GameStopped += OnGameStopped;
-
-        _ = Task.Run(async () =>
+        catch (Exception ex)
         {
-            _logger.Info("Starting game scan...");
-            await gameService.ScanAllGamesAsync();
-            _logger.Info("Game scan complete.");
-        });
-
-        // Subscribe to update notifications
-        var updateService = Services.GetRequiredService<LinuxUpdateService>();
-        updateService.UpdateAvailable += OnUpdateAvailable;
-        updateService.UpdateError += (_, error) => _logger.Warning($"Update check error: {error}");
-
-        _logger.Info("App startup complete");
+            _logger.Error("Fatal error during initialization", ex);
+            // Don't crash - try to show what we can
+        }
     }
 
     private void OnUpdateAvailable(object? sender, LinuxUpdateInfo updateInfo)

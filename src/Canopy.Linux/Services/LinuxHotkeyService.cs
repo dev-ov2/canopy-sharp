@@ -39,13 +39,29 @@ public class LinuxHotkeyService : IHotkeyService
     public LinuxHotkeyService()
     {
         _logger = CanopyLoggerFactory.CreateLogger<LinuxHotkeyService>();
-        InitializeX11();
+        
+        try
+        {
+            InitializeX11();
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"X11 hotkey service initialization failed: {ex.Message}");
+            _x11Available = false;
+        }
     }
 
     private void InitializeX11()
     {
         try
         {
+            // Check if we're on Wayland (X11 hotkeys won't work)
+            var sessionType = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE");
+            if (sessionType?.ToLower() == "wayland")
+            {
+                _logger.Warning("Running on Wayland - global hotkeys may not work");
+            }
+
             _displayMain = XOpenDisplay(IntPtr.Zero);
             if (_displayMain == IntPtr.Zero)
             {
@@ -57,6 +73,11 @@ public class LinuxHotkeyService : IHotkeyService
             _rootWindow = XDefaultRootWindow(_displayMain);
             _x11Available = true;
             _logger.Info("X11 hotkey service initialized");
+        }
+        catch (DllNotFoundException ex)
+        {
+            _logger.Warning($"X11 library not found: {ex.Message}");
+            _x11Available = false;
         }
         catch (Exception ex)
         {
