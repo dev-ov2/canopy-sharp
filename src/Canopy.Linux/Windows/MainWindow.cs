@@ -284,7 +284,8 @@ public class MainWindow : Window
                 _stack.VisibleChildName = "webview";
             }
 
-            SendInitialData();
+            // Use a fire-and-forget that catches exceptions
+            _ = SendInitialDataAsync();
         }
     }
 
@@ -309,37 +310,57 @@ public class MainWindow : Window
         args.RetVal = false;
     }
 
-    private async void SendInitialData()
+    private async Task SendInitialDataAsync()
     {
-        if (_gameService.CachedGames.Any())
+        try
         {
+            _logger.Debug("SendInitialDataAsync starting...");
+            
+            if (_gameService.CachedGames.Any())
+            {
+                await _ipcBridge.Send(new IpcMessage
+                {
+                    Type = IpcMessageTypes.GamesDetected,
+                    Payload = _gameService.CachedGames
+                });
+                _logger.Debug("Sent cached games");
+            }
+
+            try
+            {
+                var ack = await _ipcBridge.SendAndReceiveAsync<object>(new IpcMessage
+                {
+                    RequestId = Guid.NewGuid().ToString(),
+                    Type = IpcMessageTypes.Syn
+                }, TimeSpan.FromSeconds(10));
+
+                if (ack != null && _gameStatePayload != null)
+                {
+                    await _ipcBridge.Send(new IpcMessage
+                    {
+                        Type = IpcMessageTypes.GameStateUpdate,
+                        Payload = _gameStatePayload
+                    });
+                    _logger.Debug("Sent game state update");
+                }
+            }
+            catch (TimeoutException)
+            {
+                _logger.Debug("SYN handshake timed out - web app may not be ready");
+            }
+
             await _ipcBridge.Send(new IpcMessage
             {
-                Type = IpcMessageTypes.GamesDetected,
-                Payload = _gameService.CachedGames
+                Type = IpcMessageTypes.Syn,
+                Payload = new { prime = true }
             });
+            
+            _logger.Debug("SendInitialDataAsync completed");
         }
-
-        var ack = await _ipcBridge.SendAndReceiveAsync<object>(new IpcMessage
+        catch (Exception ex)
         {
-            RequestId = Guid.NewGuid().ToString(),
-            Type = IpcMessageTypes.Syn
-        }, TimeSpan.FromSeconds(10));
-
-        if (ack != null && _gameStatePayload != null)
-        {
-            await _ipcBridge.Send(new IpcMessage
-            {
-                Type = IpcMessageTypes.GameStateUpdate,
-                Payload = _gameStatePayload
-            });
+            _logger.Error("Error in SendInitialDataAsync", ex);
         }
-
-        await _ipcBridge.Send(new IpcMessage
-        {
-            Type = IpcMessageTypes.Syn,
-            Payload = new { prime = true }
-        });
     }
 
     private void OnGamesDetected(object? sender, IReadOnlyList<DetectedGame> games)

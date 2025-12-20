@@ -23,6 +23,7 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     private readonly LinuxPlatformServices _platformServices;
     private WebView? _webView;
     private string _originalTitle = "";
+    private bool _isInitialized;
     
     private const string MessagePrefix = "___CANOPY_IPC___:";
 
@@ -45,6 +46,7 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
         // Inject the compatibility shim after page loads
         webView.LoadChanged += OnLoadChanged;
         
+        _isInitialized = true;
         _logger.Info("WebView IPC bridge initialized");
     }
 
@@ -83,8 +85,15 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     {
         if (_webView != null && !string.IsNullOrEmpty(_originalTitle))
         {
-            var script = $"document.title = '{_originalTitle.Replace("'", "\\'")}';";
-            _webView.RunJavascript(script, null, null);
+            try
+            {
+                var script = $"document.title = '{_originalTitle.Replace("'", "\\'")}';";
+                _webView.RunJavascript(script, null, null);
+            }
+            catch (Exception ex)
+            {
+                _logger.Debug($"Failed to restore title: {ex.Message}");
+            }
         }
     }
 
@@ -104,7 +113,15 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     /// </summary>
     private void InjectCompatibilityShim()
     {
-        var script = $@"
+        if (_webView == null)
+        {
+            _logger.Warning("Cannot inject shim - WebView is null");
+            return;
+        }
+
+        try
+        {
+            var script = $@"
 (function() {{
     if (window.__canopyBridgeReady) return;
     window.__canopyBridgeReady = true;
@@ -117,7 +134,6 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
 
     function sendNextMessage() {{
         if (messageQueue.length === 0) {{
-
             sending = false;
             document.title = originalTitle;
             return;
@@ -162,8 +178,13 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     console.log('[Canopy] WebView bridge ready');
 }})();
 ";
-        _webView?.RunJavascript(script, null, null);
-        _logger.Debug("Compatibility shim injected");
+            _webView.RunJavascript(script, null, null);
+            _logger.Debug("Compatibility shim injected");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("Failed to inject compatibility shim", ex);
+        }
     }
 
     protected override bool HandleBuiltInMessage(IpcMessage message)
@@ -174,14 +195,21 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
         // Handle open-external
         if (message.Type == "open-external" && message.Payload != null)
         {
-            var payload = (JsonElement)message.Payload;
-            if (payload.TryGetProperty("url", out var urlElement))
+            try
             {
-                var url = urlElement.GetString();
-                if (!string.IsNullOrEmpty(url))
+                var payload = (JsonElement)message.Payload;
+                if (payload.TryGetProperty("url", out var urlElement))
                 {
-                    _platformServices.OpenUrl(url);
+                    var url = urlElement.GetString();
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        _platformServices.OpenUrl(url);
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to handle open-external: {ex.Message}");
             }
             return true;
         }
@@ -194,24 +222,44 @@ public class LinuxWebViewIpcBridge : IpcBridgeBase
     /// </summary>
     public override async Task Send(IpcMessage message)
     {
-        if (_webView == null) return;
-
-        var json = SerializeMessage(message);
-        
-        // Escape for JavaScript string
-        var escaped = json
-            .Replace("\\", "\\\\")
-            .Replace("'", "\\'")
-            .Replace("\n", "\\n")
-            .Replace("\r", "\\r");
-        
-        // Call the shim's dispatch function
-        var script = $"if(window.chrome&&window.chrome.webview)window.chrome.webview._dispatchMessage(JSON.parse('{escaped}'));";
-        
-        Gtk.Application.Invoke((_, _) =>
+        if (_webView == null || !_isInitialized)
         {
-            _webView?.RunJavascript(script, null, null);
-        });
+            _logger.Debug("Cannot send - WebView not initialized");
+            return;
+        }
+
+        try
+        {
+            var json = SerializeMessage(message);
+            
+            // Escape for JavaScript string
+            var escaped = json
+                .Replace("\\", "\\\\")
+                .Replace("'", "\\'")
+                .Replace("\n", "\\n")
+                .Replace("\r", "\\r");
+            
+            // Call the shim's dispatch function
+            var script = $"if(window.chrome&&window.chrome.webview)window.chrome.webview._dispatchMessage(JSON.parse('{escaped}'));";
+            
+            // Use GLib.Idle.Add instead of Gtk.Application.Invoke for better compatibility
+            GLib.Idle.Add(() =>
+            {
+                try
+                {
+                    _webView?.RunJavascript(script, null, null);
+                }
+                catch (Exception ex)
+                {
+                    _logger.Debug($"RunJavascript failed: {ex.Message}");
+                }
+                return false;
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.Warning($"Failed to send IPC message: {ex.Message}");
+        }
 
         await Task.CompletedTask;
     }

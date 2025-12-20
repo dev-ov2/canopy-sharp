@@ -31,6 +31,7 @@ gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
 
 # On GNOME, install AppIndicator extension
 sudo pacman -S gnome-shell-extension-appindicator  # Arch
+sudo apt install gnome-shell-extension-appindicator  # Ubuntu
 ```
 
 ## TODO
