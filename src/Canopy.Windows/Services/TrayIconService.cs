@@ -1,3 +1,4 @@
+using Canopy.Core.Logging;
 using Canopy.Core.Platform;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
@@ -10,6 +11,7 @@ namespace Canopy.Windows.Services;
 /// </summary>
 public class TrayIconService : ITrayIconService
 {
+    private readonly ICanopyLogger _logger;
     private TrayIcon? _trayIcon;
     private PopupMenu? _menu;
     private bool _isDisposed;
@@ -28,6 +30,11 @@ public class TrayIconService : ITrayIconService
     
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(nint hIcon);
+
+    public TrayIconService()
+    {
+        _logger = CanopyLoggerFactory.CreateLogger<TrayIconService>();
+    }
 
     public void Initialize()
     {
@@ -61,10 +68,11 @@ public class TrayIconService : ITrayIconService
             };
 
             _trayIcon.Create();
+            _logger.Info("Tray icon initialized");
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Tray icon initialization failed: {ex.Message}");
+            _logger.Error("Tray icon initialization failed", ex);
         }
     }
 
@@ -92,10 +100,12 @@ public class TrayIconService : ITrayIconService
             else
             {
                 _trayIcon.Icon = System.Drawing.SystemIcons.Application.Handle;
+                _logger.Warning("No icon file found, using system default");
             }
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.Warning($"Failed to load icon: {ex.Message}");
             _trayIcon.Icon = System.Drawing.SystemIcons.Application.Handle;
         }
     }
@@ -126,10 +136,11 @@ public class TrayIconService : ITrayIconService
         try
         {
             _trayIcon?.ShowNotification(title, message);
+            _logger.Debug($"Showed balloon: {title}");
         }
-        catch
+        catch (Exception ex)
         {
-            // Notification may fail
+            _logger.Warning($"Failed to show balloon: {ex.Message}");
         }
     }
 
@@ -151,5 +162,7 @@ public class TrayIconService : ITrayIconService
             DestroyIcon(_iconHandle);
             _iconHandle = 0;
         }
+        
+        _logger.Info("Tray icon disposed");
     }
 }

@@ -1,3 +1,4 @@
+using Canopy.Core.Logging;
 using Canopy.Core.Models;
 using Gameloop.Vdf;
 using Gameloop.Vdf.Linq;
@@ -10,11 +11,18 @@ namespace Canopy.Core.GameDetection;
 /// </summary>
 public class SteamScanner : IGameScanner
 {
+    private readonly ICanopyLogger _logger;
+    
     public static readonly string[] IgnoredPathElements = { "wallpaper_engine" };
 
     public GamePlatform Platform => GamePlatform.Steam;
     
     public bool IsAvailable => GetInstallPath() != null;
+
+    public SteamScanner()
+    {
+        _logger = CanopyLoggerFactory.CreateLogger<SteamScanner>();
+    }
 
     /// <summary>
     /// Gets the Steam installation path based on the current OS
@@ -37,7 +45,7 @@ public class SteamScanner : IGameScanner
         return null;
     }
 
-    private static string? GetWindowsSteamPath()
+    private string? GetWindowsSteamPath()
     {
         // Check common Steam installation paths on Windows
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
@@ -47,8 +55,6 @@ public class SteamScanner : IGameScanner
             return steamPath;
 
         // Check registry for Steam path
-        // We should already be in the Windows OS since this is only called through the GetInstallPath switch...
-        // but the IDE was complaining, so here we are.
         if (OperatingSystem.IsWindows())
         {
             try
@@ -58,11 +64,9 @@ public class SteamScanner : IGameScanner
                 if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
                     return path;
             }
-            catch
+            catch (Exception ex)
             {
-                // Registry access failed somehow...
-                // Maybe we should log this
-
+                _logger.Warning($"Failed to read Steam registry: {ex.Message}");
             }
         }
 
@@ -76,8 +80,6 @@ public class SteamScanner : IGameScanner
             testPath = Path.Combine(drive, "Steam");
             if (Directory.Exists(testPath))
                 return testPath;
-
-            // TODO do we want more paths here?
         }
 
         return null;
@@ -107,10 +109,17 @@ public class SteamScanner : IGameScanner
     {
         var steamPath = GetInstallPath();
         if (steamPath == null)
+        {
+            _logger.Debug("Steam not found");
             return [];
+        }
+
+        _logger.Debug($"Steam path: {steamPath}");
 
         var games = new List<DetectedGame>();
         var libraryFolders = await GetLibraryFoldersAsync(steamPath, cancellationToken);
+        
+        _logger.Debug($"Found {libraryFolders.Count} Steam library folders");
 
         foreach (var libraryPath in libraryFolders)
         {
@@ -119,6 +128,7 @@ public class SteamScanner : IGameScanner
             games.AddRange(libraryGames);
         }
 
+        _logger.Info($"Steam: Found {games.Count} games");
         return games.AsReadOnly();
     }
 
@@ -132,8 +142,6 @@ public class SteamScanner : IGameScanner
 
         if (!File.Exists(libraryFoldersPath))
         {
-            // we didn't find the libraryfolders file, so we'll just use the main steamapps folder
-            // TODO find a workaround
             var mainApps = Path.Combine(steamPath, "steamapps");
             if (Directory.Exists(mainApps))
                 folders.Add(mainApps);
@@ -165,10 +173,9 @@ public class SteamScanner : IGameScanner
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // VDF parsing failed because of reasons, use the main steamapps folder like above
-            // TODO also find a workaround
+            _logger.Warning($"Failed to parse libraryfolders.vdf: {ex.Message}");
             var mainApps = Path.Combine(steamPath, "steamapps");
             if (Directory.Exists(mainApps))
                 folders.Add(mainApps);
@@ -201,9 +208,9 @@ public class SteamScanner : IGameScanner
                     games.Add(game);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // if something went wrong here, the game just isn't meant to be. Ignore it
+                _logger.Debug($"Failed to parse {manifestPath}: {ex.Message}");
             }
         }
 
@@ -229,7 +236,7 @@ public class SteamScanner : IGameScanner
         if (string.IsNullOrEmpty(appId) || string.IsNullOrEmpty(name) || string.IsNullOrEmpty(installDir))
             return null;
 
-        // TODO find a better way to skip variosu tools
+        // Skip various tools
         if (name.Contains("Steamworks Common") || name.Contains("Proton") || name.Contains("Steam Linux Runtime"))
             return null;
 
@@ -263,9 +270,11 @@ public class SteamScanner : IGameScanner
             return null;
 
         var ignoredExeNames = new[] { "unins", "crash", "redist", "setup" };
+        var exePattern = OperatingSystem.IsWindows() ? "*.exe" : "*";
 
-        // Look for common executable patterns
-        var exeFiles = Directory.GetFiles(gamePath, "*.exe", SearchOption.TopDirectoryOnly);
+        var exeFiles = Directory.GetFiles(gamePath, exePattern, SearchOption.TopDirectoryOnly)
+            .Where(f => OperatingSystem.IsWindows() || IsExecutable(f))
+            .ToArray();
 
         var preferred = exeFiles.FirstOrDefault(f =>
         {
@@ -276,6 +285,20 @@ public class SteamScanner : IGameScanner
         });
 
         return preferred ?? exeFiles.FirstOrDefault();
+    }
+
+    private static bool IsExecutable(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            // Check if file has execute permission on Unix
+            return (info.Attributes & FileAttributes.Directory) == 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

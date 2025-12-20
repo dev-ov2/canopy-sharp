@@ -48,15 +48,6 @@ jobs:
         run: |
           .\scripts\Build-Installer.ps1 -Version "${{ steps.version.outputs.VERSION }}" -Configuration Release -Architecture x64
 
-      - name: List build output
-        shell: pwsh
-        run: |
-          Write-Host "Build output:"
-          Get-ChildItem -Path dist/releases -Recurse | ForEach-Object {
-            $size = if ($_.PSIsContainer) { "" } else { " ({0:N2} MB)" -f ($_.Length / 1MB) }
-            Write-Host "  $($_.FullName)$size"
-          }
-
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
@@ -64,18 +55,63 @@ jobs:
           path: dist/releases/*
           if-no-files-found: error
 
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          elif [[ "${{ github.ref }}" =~ refs/tags/v(.+) ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+          else
+            VERSION="0.0.1-dev.${{ github.run_number }}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Build Linux package
+        run: |
+          chmod +x scripts/build-linux.sh
+          VERSION="${{ steps.version.outputs.VERSION }}" ./scripts/build-linux.sh
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Canopy-Linux-x64
+          path: dist/canopy-*-linux-x64.tar.gz
+          if-no-files-found: error
+
   release:
-    needs: [build-windows]
+    needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
           name: Canopy-Windows-x64
           path: artifacts/windows
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: Canopy-Linux-x64
+          path: artifacts/linux
 
       - name: Get version
         id: version
@@ -92,6 +128,8 @@ jobs:
         run: |
           echo "=== Windows artifacts ==="
           ls -la artifacts/windows/
+          echo "=== Linux artifacts ==="
+          ls -la artifacts/linux/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -105,6 +143,7 @@ jobs:
             artifacts/windows/*Portable.zip
             artifacts/windows/*-full.nupkg
             artifacts/windows/RELEASES
+            artifacts/linux/canopy-*-linux-x64.tar.gz
           body: |
             ## Canopy v${{ steps.version.outputs.VERSION }}
             
@@ -112,27 +151,38 @@ jobs:
             
             | Platform | File | Description |
             |----------|------|-------------|
-            | **Windows** | `CanopySetup-${{ steps.version.outputs.VERSION }}.exe` | **Single-file GUI Installer** (recommended) |
-            | Windows | `Canopy-win-Portable.zip` | Portable version (no install) |
+            | **Windows** | `CanopySetup-${{ steps.version.outputs.VERSION }}.exe` | GUI Installer (recommended) |
+            | Windows | `Canopy-win-Portable.zip` | Portable version |
+            | **Linux** | `canopy-${{ steps.version.outputs.VERSION }}-linux-x64.tar.gz` | Linux x64 package |
             
             ### Installation
             
-            **Windows (Recommended):**
+            **Windows:**
             1. Download `CanopySetup-${{ steps.version.outputs.VERSION }}.exe`
-            2. Run the installer - that's it! No other downloads needed.
-            3. Follow the wizard with options for:
-               - ✅ Start with Windows
-               - ✅ Desktop shortcut
-               - ✅ Start Menu shortcut
+            2. Run the installer
             
-            **Windows (Portable):**
-            1. Download and extract `Canopy-win-Portable.zip`
-            2. Run `Canopy.Windows.exe`
+            **Linux (One-Click):**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/dev-ov2/canopy-sharp/main/scripts/install.sh | bash
+            ```
             
-            ### Auto-Updates
+            **Linux (Manual):**
+            ```bash
+            curl -fsSL https://github.com/dev-ov2/canopy-sharp/releases/download/v${{ steps.version.outputs.VERSION }}/canopy-${{ steps.version.outputs.VERSION }}-linux-x64.tar.gz | tar -xz
+            cd canopy-${{ steps.version.outputs.VERSION }}-linux-x64
+            ./install.sh
+            ```
             
-            Canopy automatically checks for updates and will notify you when a new version is available.
+            ### Requirements
             
-            ---
+            **Linux:** GTK 3, WebKitGTK, libappindicator3
+            ```bash
+            # Arch Linux
+            sudo pacman -S gtk3 webkit2gtk libappindicator-gtk3
             
-            > **Note:** Linux and macOS support is planned for a future release.
+            # Ubuntu/Debian
+            sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37 libappindicator3-1
+            
+            # Fedora
+            sudo dnf install gtk3 webkit2gtk3 libappindicator-gtk3
+            ```

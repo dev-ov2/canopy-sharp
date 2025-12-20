@@ -102,7 +102,7 @@ public sealed partial class SettingsWindow : Window
 
     private void UpdateOverlayControlsState()
     {
-        var isEnabled = EnableOverlayToggle.IsOn;
+        bool isEnabled = EnableOverlayToggle.IsOn;
         OverlayShortcutGrid.Opacity = isEnabled ? 1.0 : 0.5;
         DragShortcutGrid.Opacity = isEnabled ? 1.0 : 0.5;
         OverlayShortcutTextBox.IsEnabled = isEnabled;
@@ -113,7 +113,7 @@ public sealed partial class SettingsWindow : Window
     private void StartWithWindowsToggle_Toggled(object sender, RoutedEventArgs e)
     {
         if (!_settingsLoaded) return;
-        var isEnabled = StartWithWindowsToggle.IsOn;
+        bool isEnabled = StartWithWindowsToggle.IsOn;
         _platformServices.SetStartupRegistration(isEnabled, StartOpenToggle.IsOn);
         _settingsService.Update(s => s.StartWithWindows = isEnabled);
 

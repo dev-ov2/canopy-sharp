@@ -6,19 +6,44 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Canopy.Linux</RootNamespace>
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
 
     <!-- Package metadata -->
     <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>Canopy</Product>
+    <Company>Canopy</Company>
     <Authors>Canopy Contributors</Authors>
-    <Description>Canopy Linux application (stub - not yet implemented)</Description>
+    <Description>Canopy Linux application - Game overlay and tracking</Description>
+    <Copyright>Copyright © 2024 Canopy Contributors</Copyright>
+    <RepositoryUrl>https://github.com/dev-ov2/canopy-sharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    
+    <!-- Application icon -->
+    <ApplicationIcon>Assets\canopy.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GtkSharp" Version="3.24.24.95" />
+    <PackageReference Include="WebkitGtkSharp" Version="3.24.24.95" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Canopy.Core\Canopy.Core.csproj" />
   </ItemGroup>
 
-  <!-- TODO: Add Linux-specific packages when implementing -->
-  <!-- <PackageReference Include="GtkSharp" Version="3.24.24.95" /> -->
-  <!-- <PackageReference Include="Velopack" Version="0.0.626" /> -->
+  <!-- Ensure Assets are copied to output -->
+  <ItemGroup>
+    <None Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="install\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Explicitly include PNG files as content -->
+  <ItemGroup>
+    <Content Include="Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

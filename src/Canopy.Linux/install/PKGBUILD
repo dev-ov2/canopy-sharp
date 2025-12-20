@@ -1,0 +1,54 @@
+# Maintainer: Canopy Contributors
+pkgname=canopy
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Game overlay and tracking application"
+arch=('x86_64')
+url="https://github.com/dev-ov2/canopy-sharp"
+license=('MIT')
+depends=(
+    'dotnet-runtime-8.0'
+    'gtk3'
+    'webkit2gtk'
+    'libnotify'
+    'libx11'
+)
+optdepends=(
+    'steam: Steam game detection'
+)
+source=("$pkgname-$pkgver.tar.gz::https://github.com/dev-ov2/canopy-sharp/releases/download/v$pkgver/canopy-linux-x64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir"
+    
+    # Install application
+    install -d "$pkgdir/opt/canopy"
+    cp -r * "$pkgdir/opt/canopy/"
+    
+    # Make executable
+    chmod +x "$pkgdir/opt/canopy/Canopy.Linux"
+    
+    # Create symlink
+    install -d "$pkgdir/usr/bin"
+    ln -s /opt/canopy/Canopy.Linux "$pkgdir/usr/bin/canopy"
+    
+    # Install desktop file
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/canopy.desktop" << EOF
+[Desktop Entry]
+Type=Application
+Name=Canopy
+Comment=Game overlay and tracking application
+Exec=/opt/canopy/Canopy.Linux %u
+Icon=canopy
+Terminal=false
+Categories=Game;Utility;
+MimeType=x-scheme-handler/canopy;
+StartupWMClass=canopy
+EOF
+    
+    # Install icon
+    if [ -f "$pkgdir/opt/canopy/Assets/canopy.png" ]; then
+        install -Dm644 "$pkgdir/opt/canopy/Assets/canopy.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/canopy.png"
+    fi
+}

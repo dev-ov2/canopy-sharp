@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Canopy.Core.Logging;
 using Canopy.Core.Platform;
 using Microsoft.Win32;
 
@@ -10,8 +11,14 @@ namespace Canopy.Windows.Services;
 /// </summary>
 public class WindowsPlatformServices : IPlatformServices
 {
+    private readonly ICanopyLogger _logger;
     private const string AppName = "Canopy";
     private const string RegistryRunKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+
+    public WindowsPlatformServices()
+    {
+        _logger = CanopyLoggerFactory.CreateLogger<WindowsPlatformServices>();
+    }
 
     #region Auto-Start (IPlatformServices)
 
@@ -42,7 +49,7 @@ public class WindowsPlatformServices : IPlatformServices
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to check startup registration: {ex.Message}");
+            _logger.Error("Failed to check startup registration", ex);
             return false;
         }
     }
@@ -67,19 +74,19 @@ public class WindowsPlatformServices : IPlatformServices
                     exePath += " --minimized";
                 }
                 key.SetValue(AppName, $"\"{exePath}\"");
-                Debug.WriteLine($"Registered for startup: {exePath}");
+                _logger.Info($"Registered for startup: {exePath}");
             }
             else
             {
                 key.DeleteValue(AppName, false);
-                Debug.WriteLine("Unregistered from startup");
+                _logger.Info("Unregistered from startup");
             }
 
             return true;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to set startup registration: {ex.Message}");
+            _logger.Error("Failed to set startup registration", ex);
             return false;
         }
     }
@@ -93,6 +100,8 @@ public class WindowsPlatformServices : IPlatformServices
     /// </summary>
     public static void RegisterProtocol(string protocol, string exePath)
     {
+        var logger = CanopyLoggerFactory.CreateLogger(nameof(WindowsPlatformServices));
+        
         try
         {
             string keyPath = $@"Software\Classes\{protocol}";
@@ -112,11 +121,11 @@ public class WindowsPlatformServices : IPlatformServices
                 shellKey?.SetValue(string.Empty, $"\"{exePath}\" \"%1\"");
             }
 
-            Debug.WriteLine($"Registered protocol handler: {protocol}");
+            logger.Info($"Registered protocol handler: {protocol}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to register protocol: {ex.Message}");
+            logger.Error($"Failed to register protocol: {protocol}", ex);
         }
     }
 
@@ -133,10 +142,11 @@ public class WindowsPlatformServices : IPlatformServices
                 FileName = url,
                 UseShellExecute = true
             });
+            _logger.Debug($"Opened URL: {url}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to open URL: {ex.Message}");
+            _logger.Error($"Failed to open URL: {url}", ex);
         }
     }
 
@@ -161,10 +171,11 @@ public class WindowsPlatformServices : IPlatformServices
                     UseShellExecute = true
                 });
             }
+            _logger.Debug($"Opened path: {path}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"Failed to open path: {ex.Message}");
+            _logger.Error($"Failed to open path: {path}", ex);
         }
     }
 

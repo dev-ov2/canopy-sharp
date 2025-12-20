@@ -15,7 +15,8 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
-	<UseAppHost>true</UseAppHost>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>	
+  <UseAppHost>true</UseAppHost>
 	<SelfContained>false</SelfContained>
 
     <!-- Application metadata -->
