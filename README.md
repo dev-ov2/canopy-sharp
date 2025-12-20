@@ -2,60 +2,49 @@
 
 Cross-platform desktop app for game tracking, built with .NET 8. Wraps a web app in a native WebView with Steam game detection, system tray integration, and OAuth support.
 
+## Installation
+
+### Windows
+
+Download the latest installer from [Releases](https://github.com/dev-ov2/canopy-sharp/releases).
+
+### Linux (One-Click)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dev-ov2/canopy-sharp/main/scripts/install.sh | bash
+```
+
+Or install a specific version:
+```bash
+VERSION=1.0.0 curl -fsSL https://raw.githubusercontent.com/dev-ov2/canopy-sharp/main/scripts/install.sh | bash
+```
+
+### Linux (Manual)
+
+```bash
+# Download and extract
+curl -fsSL https://github.com/dev-ov2/canopy-sharp/releases/latest/download/canopy-1.0.0-linux-x64.tar.gz | tar -xz
+cd canopy-*-linux-x64
+./install.sh
+```
+
 ## Features
 
 ### Windows ✅
 
-- WebView2 wrapper for the Canopy web app
-- Steam game detection and monitoring
-- Game overlay with drag support
-- Global hotkeys
-- System tray with context menu
-- Auto-updates via Velopack
+- WebView2 wrapper, Steam game detection, game overlay
+- Global hotkeys, system tray, auto-updates
 - Protocol handler (`canopy://`)
 
 ### Linux 🚧
 
-- WebKitGTK wrapper
-- Steam game detection
-- System tray (AppIndicator)
-- Auto-start support
-- Protocol handler
-- Update notifications
+- WebKitGTK wrapper, Steam game detection
+- System tray (AppIndicator), auto-start
+- Protocol handler, update notifications
 
 ### macOS 📋
 
 - Planned
-
-## Project Structure
-
-```
-src/
-├── Canopy.Core/        # Shared cross-platform code
-├── Canopy.Windows/     # Windows (WinUI 3 + WebView2)
-├── Canopy.Linux/       # Linux (GTK# + WebKitGTK)
-├── Canopy.Mac/         # macOS (stub)
-└── Canopy.Setup/       # Windows installer
-```
-
-## Requirements
-
-### Windows
-
-- Windows 10 1803+ (build 17134)
-- .NET 8.0 Runtime (bundled)
-- WebView2 Runtime (auto-installed)
-
-### Linux
-
-- .NET 8.0 Runtime
-- GTK 3, WebKitGTK, libappindicator3
-- X11 (Wayland has limited support)
-
-### Development
-
-- .NET 8.0 SDK
-- Visual Studio 2022 or VS Code
 
 ## Building
 
@@ -64,11 +53,17 @@ src/
 dotnet build src/Canopy.Windows -c Release
 
 # Linux
-dotnet build src/Canopy.Linux -c Release
+./scripts/build-linux.sh
+```
 
-# Run
-dotnet run --project src/Canopy.Windows
-dotnet run --project src/Canopy.Linux
+## Project Structure
+
+```
+src/
+├── Canopy.Core/        # Shared cross-platform code
+├── Canopy.Windows/     # Windows (WinUI 3 + WebView2)
+├── Canopy.Linux/       # Linux (GTK# + WebKitGTK)
+└── Canopy.Setup/       # Windows installer
 ```
 
 ## Configuration
@@ -78,33 +73,18 @@ dotnet run --project src/Canopy.Linux
 | Windows  | `%LOCALAPPDATA%\Canopy\settings.json` |
 | Linux    | `~/.config/canopy/settings.json` |
 
-## Architecture
+## Uninstall
 
-### Core Layer
-
-- **AppCoordinator** - Central event hub
-- **ISettingsService** - Settings persistence
-- **IpcBridgeBase** - WebView communication
-- **GameService** - Game detection aggregator
-
-### Platform Layer
-
-Each platform implements:
-
-- Settings service
-- IPC bridge
-- Hotkey service
-- Tray icon service
-- Platform services (startup, protocol handler)
+### Linux
+```bash
+rm -rf ~/.local/share/canopy ~/.local/bin/canopy
+rm ~/.local/share/applications/canopy.desktop
+rm ~/.local/share/icons/hicolor/256x256/apps/canopy.png
+```
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Open a Pull Request
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

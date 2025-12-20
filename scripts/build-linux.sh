@@ -1,10 +1,9 @@
 #!/bin/bash
 # Canopy Linux Build Script
-# Creates a self-contained distribution package
+# Creates a self-contained distribution package for Arch Linux and other distros
 
 set -e
 
-# Configuration
 VERSION="${VERSION:-1.0.0}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 RUNTIME="linux-x64"
@@ -26,32 +25,28 @@ PROJECT_FILE="$PROJECT_DIR/Canopy.Linux.csproj"
 
 echo -e "${CYAN}=== Canopy Linux Build ===${NC}"
 echo "Version: $VERSION"
-echo "Configuration: $CONFIGURATION"
 echo "Runtime: $RUNTIME"
 echo ""
 
 # Check .NET SDK
 if ! command -v dotnet &> /dev/null; then
     echo -e "${RED}Error: .NET SDK not found${NC}"
-    echo "Please install .NET 8 SDK: https://dot.net/download"
+    echo "Install: sudo pacman -S dotnet-sdk-8.0"
     exit 1
 fi
 
-DOTNET_VERSION=$(dotnet --version)
-echo -e "${GREEN}Found .NET SDK: $DOTNET_VERSION${NC}"
+echo -e "${GREEN}Found .NET SDK: $(dotnet --version)${NC}"
 
-# Clean dist directory
-echo -e "${YELLOW}Cleaning dist directory...${NC}"
+# Clean and create dist directory
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
-# Publish directory
 PUBLISH_DIR="$DIST_DIR/publish"
 PACKAGE_NAME="canopy-$VERSION-linux-x64"
 PACKAGE_DIR="$DIST_DIR/$PACKAGE_NAME"
 
-# Build and publish
-echo -e "${YELLOW}Building and publishing...${NC}"
+# Build
+echo -e "${YELLOW}Building...${NC}"
 dotnet publish "$PROJECT_FILE" \
     -c "$CONFIGURATION" \
     -r "$RUNTIME" \
@@ -62,154 +57,102 @@ dotnet publish "$PROJECT_FILE" \
     -p:DebugType=none \
     -p:DebugSymbols=false
 
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Build failed${NC}"
-    exit 1
-fi
-
 echo -e "${GREEN}Build successful${NC}"
 
-# Create package directory structure
+# Create package structure
 echo -e "${YELLOW}Creating package...${NC}"
-mkdir -p "$PACKAGE_DIR"
 mkdir -p "$PACKAGE_DIR/lib"
 mkdir -p "$PACKAGE_DIR/share/applications"
 mkdir -p "$PACKAGE_DIR/share/icons/hicolor/256x256/apps"
 
-# Copy application files
 cp -r "$PUBLISH_DIR/"* "$PACKAGE_DIR/lib/"
-
-# Make main executable
 chmod +x "$PACKAGE_DIR/lib/Canopy.Linux"
 
-# Copy icon if exists
-ICON_SRC="$PROJECT_DIR/Assets/canopy.png"
-if [ -f "$ICON_SRC" ]; then
-    cp "$ICON_SRC" "$PACKAGE_DIR/share/icons/hicolor/256x256/apps/canopy.png"
+# Icon
+if [ -f "$PROJECT_DIR/Assets/canopy.png" ]; then
+    cp "$PROJECT_DIR/Assets/canopy.png" "$PACKAGE_DIR/share/icons/hicolor/256x256/apps/"
 fi
 
-# Create launcher script
+# Launcher script
 cat > "$PACKAGE_DIR/canopy" << 'EOF'
 #!/bin/bash
-# Canopy Launcher Script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:$LD_LIBRARY_PATH"
 exec "$SCRIPT_DIR/lib/Canopy.Linux" "$@"
 EOF
 chmod +x "$PACKAGE_DIR/canopy"
 
-# Create desktop entry
+# Desktop entry
 cat > "$PACKAGE_DIR/share/applications/canopy.desktop" << EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Canopy
-GenericName=Game Overlay
-Comment=Game overlay and tracking application
+Comment=Game overlay and tracking
 Exec=canopy %u
 Icon=canopy
 Terminal=false
 Categories=Game;Utility;
-Keywords=games;overlay;tracking;
 MimeType=x-scheme-handler/canopy;
 StartupWMClass=canopy
-StartupNotify=true
 EOF
 
-# Create install script
-cat > "$PACKAGE_DIR/install.sh" << 'EOF'
+# Install script
+cat > "$PACKAGE_DIR/install.sh" << 'INSTALL'
 #!/bin/bash
-# Canopy Install Script
 set -e
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/canopy}"
-BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-APPLICATIONS_DIR="$HOME/.local/share/applications"
-ICONS_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
+BIN_DIR="$HOME/.local/bin"
 
-echo "Installing Canopy to $INSTALL_DIR..."
+echo "Installing Canopy..."
 
-# Create directories
-mkdir -p "$INSTALL_DIR"
-mkdir -p "$BIN_DIR"
-mkdir -p "$APPLICATIONS_DIR"
-mkdir -p "$ICONS_DIR"
+mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+mkdir -p "$HOME/.local/share/applications"
+mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
 
-# Copy files
 cp -r "$SCRIPT_DIR/lib/"* "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/Canopy.Linux"
-
-# Create symlink
 ln -sf "$INSTALL_DIR/Canopy.Linux" "$BIN_DIR/canopy"
 
-# Install icon
-if [ -f "$SCRIPT_DIR/share/icons/hicolor/256x256/apps/canopy.png" ]; then
-    cp "$SCRIPT_DIR/share/icons/hicolor/256x256/apps/canopy.png" "$ICONS_DIR/"
-fi
+[ -f "$SCRIPT_DIR/share/icons/hicolor/256x256/apps/canopy.png" ] && \
+    cp "$SCRIPT_DIR/share/icons/hicolor/256x256/apps/canopy.png" \
+       "$HOME/.local/share/icons/hicolor/256x256/apps/"
 
-# Install desktop entry
 sed "s|Exec=canopy|Exec=$INSTALL_DIR/Canopy.Linux|g" \
-    "$SCRIPT_DIR/share/applications/canopy.desktop" > "$APPLICATIONS_DIR/canopy.desktop"
+    "$SCRIPT_DIR/share/applications/canopy.desktop" > \
+    "$HOME/.local/share/applications/canopy.desktop"
 
-# Update desktop database
-update-desktop-database "$APPLICATIONS_DIR" 2>/dev/null || true
-
-# Register protocol handler
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 xdg-mime default canopy.desktop x-scheme-handler/canopy 2>/dev/null || true
 
-echo ""
-echo "Canopy installed successfully!"
-echo ""
-echo "You can now:"
-echo "  - Run 'canopy' from the terminal"
-echo "  - Find 'Canopy' in your application menu"
-echo ""
-EOF
+echo "Done! Run 'canopy' or find Canopy in your app menu."
+INSTALL
 chmod +x "$PACKAGE_DIR/install.sh"
 
-# Create uninstall script
-cat > "$PACKAGE_DIR/uninstall.sh" << 'EOF'
+# Uninstall script
+cat > "$PACKAGE_DIR/uninstall.sh" << 'UNINSTALL'
 #!/bin/bash
-# Canopy Uninstall Script
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/canopy}"
-BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
-APPLICATIONS_DIR="$HOME/.local/share/applications"
-ICONS_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
-
-echo "Uninstalling Canopy..."
-
-rm -rf "$INSTALL_DIR"
-rm -f "$BIN_DIR/canopy"
-rm -f "$APPLICATIONS_DIR/canopy.desktop"
-rm -f "$ICONS_DIR/canopy.png"
-
-update-desktop-database "$APPLICATIONS_DIR" 2>/dev/null || true
-
-echo "Canopy uninstalled."
-EOF
+rm -rf "$HOME/.local/share/canopy"
+rm -f "$HOME/.local/bin/canopy"
+rm -f "$HOME/.local/share/applications/canopy.desktop"
+rm -f "$HOME/.local/share/icons/hicolor/256x256/apps/canopy.png"
+echo "Canopy uninstalled. Config remains in ~/.config/canopy/"
+UNINSTALL
 chmod +x "$PACKAGE_DIR/uninstall.sh"
 
-# Create tar.gz archive
-echo -e "${YELLOW}Creating archive...${NC}"
+# Create archive
 cd "$DIST_DIR"
 tar -czf "$PACKAGE_NAME.tar.gz" "$PACKAGE_NAME"
-
-# Calculate size
-ARCHIVE_SIZE=$(du -h "$PACKAGE_NAME.tar.gz" | cut -f1)
-
-# Clean up
 rm -rf "$PUBLISH_DIR"
+
+ARCHIVE_SIZE=$(du -h "$PACKAGE_NAME.tar.gz" | cut -f1)
 
 echo ""
 echo -e "${GREEN}=== Build Complete ===${NC}"
 echo ""
 echo -e "Output: ${CYAN}$DIST_DIR/$PACKAGE_NAME.tar.gz${NC} ($ARCHIVE_SIZE)"
 echo ""
-echo "To install:"
-echo "  1. Extract: tar -xzf $PACKAGE_NAME.tar.gz"
-echo "  2. Run: cd $PACKAGE_NAME && ./install.sh"
-echo ""
-echo "Or run directly without installing:"
-echo "  cd $PACKAGE_NAME && ./canopy"
+echo "Install options:"
+echo "  1. Extract and run install.sh"
+echo "  2. Arch Linux: yay -S canopy-bin"
 echo ""
