@@ -26,7 +26,6 @@ public class App : Gtk.Application
     private ITrayIconService? _trayIconService;
     private MainWindow? _mainWindow;
     private SettingsWindow? _settingsWindow;
-    private OverlayWindow? _overlayWindow;
     private AppCoordinator? _appCoordinator;
     private readonly bool _startMinimized;
     private readonly string[]? _commandLineArgs;
@@ -121,11 +120,9 @@ public class App : Gtk.Application
         // Create windows
         _logger.Debug("Creating MainWindow...");
         _mainWindow = Services.GetRequiredService<MainWindow>();
-        _overlayWindow = Services.GetRequiredService<OverlayWindow>();
         
         AddWindow(_mainWindow);
-        AddWindow(_overlayWindow);
-        _logger.Debug("Windows created and added");
+        _logger.Debug("Window created and added");
 
         if (!_startMinimized)
         {
@@ -383,7 +380,6 @@ public class App : Gtk.Application
         services.AddSingleton<GameService>();
 
         services.AddSingleton<MainWindow>();
-        services.AddSingleton<OverlayWindow>();
         services.AddSingleton<LinuxWebViewIpcBridge>();
     }
 
@@ -397,16 +393,9 @@ public class App : Gtk.Application
         _appCoordinator.ShowSettingsRequested += (_, _) =>
             GLib.Idle.Add(() => { ShowSettingsWindow(); return false; });
 
-        _appCoordinator.OverlayToggleRequested += (_, _) =>
-            GLib.Idle.Add(() => { _overlayWindow?.Toggle(); return false; });
-
-        _appCoordinator.OverlayDragToggleRequested += (_, _) =>
-            GLib.Idle.Add(() =>
-            {
-                if (_overlayWindow?.IsVisible == true)
-                    _overlayWindow.ToggleDragMode();
-                return false;
-            });
+        // TODO: Re-add overlay support when ready
+        // _appCoordinator.OverlayToggleRequested += ...
+        // _appCoordinator.OverlayDragToggleRequested += ...
 
         _appCoordinator.TokenReady += (_, e) =>
         {
@@ -509,8 +498,7 @@ public class App : Gtk.Application
             var settings = Services.GetRequiredService<ISettingsService>().Settings;
             if (settings.EnableOverlay)
             {
-                _overlayWindow?.UpdateGameInfo(payload.Name);
-                _overlayWindow?.ShowOverlay();
+                // TODO: Show overlay when implemented
             }
             return false;
         });
@@ -522,7 +510,7 @@ public class App : Gtk.Application
         
         GLib.Idle.Add(() =>
         {
-            _overlayWindow?.UpdateGameInfo(null);
+            // TODO: Update overlay when implemented
             return false;
         });
     }
