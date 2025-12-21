@@ -10,8 +10,8 @@ namespace Canopy.Linux.Services;
 /// Linux system tray icon service using AppIndicator.
 /// 
 /// Tries multiple library variants in order:
-/// 1. libayatana-appindicator-glib (GLib-only, lighter)
-/// 2. libayatana-appindicator3 (GTK3 variant)
+/// 1. libayatana-appindicator-glib (GLib-only, recommended for new code)
+/// 2. libayatana-appindicator3 (GTK3 variant, deprecated but widely available)
 /// 3. libappindicator3 (legacy Ubuntu)
 /// 
 /// For Arch Linux / CachyOS:
@@ -31,9 +31,9 @@ public class LinuxTrayIconService : ITrayIconService
     private enum AppIndicatorLibrary
     {
         None,
-        AyatanaGlib,
-        AyatanaGtk3,
-        LegacyGtk3
+        AyatanaGlib,      // libayatana-appindicator-glib (recommended)
+        AyatanaGtk3,      // libayatana-appindicator3 (deprecated but common)
+        LegacyGtk3        // libappindicator3 (legacy Ubuntu)
     }
 
     public event EventHandler? ShowWindowRequested;
@@ -108,11 +108,11 @@ public class LinuxTrayIconService : ITrayIconService
 
         // Try each library variant in order of preference
         
-        // 1. Try libayatana-appindicator (GLib variant - lighter weight)
+        // 1. Try libayatana-appindicator-glib (GLib variant - recommended for new code)
         if (TryLibrary(AppIndicatorLibrary.AyatanaGlib, iconArg))
             return true;
             
-        // 2. Try libayatana-appindicator3 (GTK3 variant)
+        // 2. Try libayatana-appindicator3 (GTK3 variant - deprecated but widely available)
         if (TryLibrary(AppIndicatorLibrary.AyatanaGtk3, iconArg))
             return true;
             
@@ -283,19 +283,73 @@ public class LinuxTrayIconService : ITrayIconService
 
     #region AppIndicator P/Invoke
 
-    // libayatana-appindicator (GLib variant - preferred)
-    // Package: libayatana-appindicator on Arch
-    [DllImport("libayatana-appindicator.so.1", EntryPoint = "app_indicator_new")]
-    private static extern IntPtr ayatana_glib_app_indicator_new(string id, string iconName, int category);
+    // =========================================================================
+    // libayatana-appindicator-glib (GLib-only, RECOMMENDED for new code)
+    // Package: libayatana-appindicator on Arch (provides the -glib variant)
+    // This is the modern, non-deprecated library
+    // =========================================================================
     
-    [DllImport("libayatana-appindicator.so.1", EntryPoint = "app_indicator_set_status")]
-    private static extern void ayatana_glib_app_indicator_set_status(IntPtr indicator, int status);
+    // Try multiple possible .so names for the glib variant
+    [DllImport("libayatana-appindicator-glib.so.1", EntryPoint = "app_indicator_new")]
+    private static extern IntPtr ayatana_glib_v1_app_indicator_new(string id, string iconName, int category);
     
-    [DllImport("libayatana-appindicator.so.1", EntryPoint = "app_indicator_set_menu")]
-    private static extern void ayatana_glib_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
+    [DllImport("libayatana-appindicator-glib.so.1", EntryPoint = "app_indicator_set_status")]
+    private static extern void ayatana_glib_v1_app_indicator_set_status(IntPtr indicator, int status);
+    
+    [DllImport("libayatana-appindicator-glib.so.1", EntryPoint = "app_indicator_set_menu")]
+    private static extern void ayatana_glib_v1_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
-    // libayatana-appindicator3 (GTK3 variant)
+    // Wrapper that tries different glib library names
+    private static IntPtr ayatana_glib_app_indicator_new(string id, string iconName, int category)
+    {
+        // Try libayatana-appindicator-glib.so.1 first
+        try { return ayatana_glib_v1_app_indicator_new(id, iconName, category); }
+        catch (DllNotFoundException) { }
+        
+        // Try without version suffix
+        try { return ayatana_glib_nover_app_indicator_new(id, iconName, category); }
+        catch (DllNotFoundException) { }
+        
+        throw new DllNotFoundException("libayatana-appindicator-glib not found");
+    }
+    
+    private static void ayatana_glib_app_indicator_set_status(IntPtr indicator, int status)
+    {
+        try { ayatana_glib_v1_app_indicator_set_status(indicator, status); return; }
+        catch (DllNotFoundException) { }
+        
+        try { ayatana_glib_nover_app_indicator_set_status(indicator, status); return; }
+        catch (DllNotFoundException) { }
+        
+        throw new DllNotFoundException("libayatana-appindicator-glib not found");
+    }
+    
+    private static void ayatana_glib_app_indicator_set_menu(IntPtr indicator, IntPtr menu)
+    {
+        try { ayatana_glib_v1_app_indicator_set_menu(indicator, menu); return; }
+        catch (DllNotFoundException) { }
+        
+        try { ayatana_glib_nover_app_indicator_set_menu(indicator, menu); return; }
+        catch (DllNotFoundException) { }
+        
+        throw new DllNotFoundException("libayatana-appindicator-glib not found");
+    }
+
+    // Without version suffix
+    [DllImport("libayatana-appindicator-glib.so", EntryPoint = "app_indicator_new")]
+    private static extern IntPtr ayatana_glib_nover_app_indicator_new(string id, string iconName, int category);
+    
+    [DllImport("libayatana-appindicator-glib.so", EntryPoint = "app_indicator_set_status")]
+    private static extern void ayatana_glib_nover_app_indicator_set_status(IntPtr indicator, int status);
+    
+    [DllImport("libayatana-appindicator-glib.so", EntryPoint = "app_indicator_set_menu")]
+    private static extern void ayatana_glib_nover_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
+
+    // =========================================================================
+    // libayatana-appindicator3 (GTK3 variant - deprecated but widely available)
     // Package: libayatana-appindicator-gtk3 on Arch
+    // Shows deprecation warning but still works
+    // =========================================================================
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_new")]
     private static extern IntPtr ayatana_gtk3_app_indicator_new(string id, string iconName, int category);
     
@@ -305,7 +359,9 @@ public class LinuxTrayIconService : ITrayIconService
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
     private static extern void ayatana_gtk3_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
-    // Legacy libappindicator3 (Ubuntu/older)
+    // =========================================================================
+    // Legacy libappindicator3 (Ubuntu/older distros)
+    // =========================================================================
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_new")]
     private static extern IntPtr legacy_gtk3_app_indicator_new(string id, string iconName, int category);
     

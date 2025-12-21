@@ -31,18 +31,24 @@ cd canopy-*-linux-x64
 ### Linux Dependencies
 
 ```bash
-# Arch Linux
+# Arch Linux / CachyOS
 sudo pacman -S gtk3 webkit2gtk libayatana-appindicator
 
-# Ubuntu/Debian
+# Ubuntu/Debian (22.04+)
 sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37 libayatana-appindicator3-1
+
+# Ubuntu/Debian (older)
+sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37 libappindicator3-1
 
 # Fedora
 sudo dnf install gtk3 webkit2gtk3 libayatana-appindicator-gtk3
 
 # GNOME (for system tray support)
-sudo pacman -S gnome-shell-extension-appindicator  # Arch
-sudo apt install gnome-shell-extension-appindicator  # Ubuntu
+# Arch:
+sudo pacman -S gnome-shell-extension-appindicator
+# Ubuntu:
+sudo apt install gnome-shell-extension-appindicator
+# Then enable the extension in GNOME Extensions app
 ```
 
 ## Features
@@ -117,11 +123,15 @@ dotnet tool install -g dotnet-dump
 ### System Tray Not Showing
 
 Canopy tries these AppIndicator libraries in order:
-1. `libayatana-appindicator` (preferred)
-2. `libayatana-appindicator3`
-3. `libappindicator3` (legacy)
+1. `libayatana-appindicator-glib` (recommended, no deprecation warnings)
+2. `libayatana-appindicator3` (GTK3 variant, deprecated but works)
+3. `libappindicator3` (legacy Ubuntu)
 
-Install the appropriate package for your distro (see Dependencies above).
+If you see deprecation warnings about `libayatana-appindicator`, install the glib variant:
+```bash
+# Arch Linux - the libayatana-appindicator package includes the glib variant
+sudo pacman -S libayatana-appindicator
+```
 
 On GNOME, you also need the AppIndicator extension enabled.
 
