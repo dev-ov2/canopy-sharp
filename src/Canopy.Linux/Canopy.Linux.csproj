@@ -54,9 +54,6 @@
     <DebugType>portable</DebugType>
     <DebugSymbols>true</DebugSymbols>
     
-    <!-- Embed sources for debugging without source files -->
-    <EmbedAllSources>true</EmbedAllSources>
-    
     <!-- Don't trim unused code - ensures complete stack traces -->
     <PublishTrimmed>false</PublishTrimmed>
     

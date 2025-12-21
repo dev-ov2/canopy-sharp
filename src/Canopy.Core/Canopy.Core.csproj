@@ -32,7 +32,6 @@
     <Optimize>true</Optimize>
     <DebugType>portable</DebugType>
     <DebugSymbols>true</DebugSymbols>
-    <EmbedAllSources>true</EmbedAllSources>
     <DefineConstants>TRACE</DefineConstants>
   </PropertyGroup>
 
