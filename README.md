@@ -50,7 +50,7 @@ cd canopy-*-linux-x64
 
 ```bash
 # Windows
-dotnet build src/Canopy.Windows -c Release
+dotnet build src/Canopy.Windows -c Release -r win-x64
 
 # Linux
 ./scripts/build-linux.sh
@@ -72,6 +72,28 @@ src/
 |----------|-----------------------------------|
 | Windows  | `%LOCALAPPDATA%\Canopy\settings.json` |
 | Linux    | `~/.config/canopy/settings.json` |
+
+## Troubleshooting
+
+### Linux Crashes
+
+If Canopy crashes, you can generate a crash report:
+
+```bash
+# Download and run the diagnosis script
+curl -fsSL https://raw.githubusercontent.com/dev-ov2/canopy-sharp/main/scripts/diagnose-crash.sh | bash
+```
+
+This will:
+1. Find recent coredumps
+2. Extract stack traces (if dotnet-dump is installed)
+3. Collect system info and logs
+4. Save a report to `~/canopy-crash-report/`
+
+To install dotnet-dump for better crash analysis:
+```bash
+dotnet tool install -g dotnet-dump
+```
 
 ## Uninstall
 

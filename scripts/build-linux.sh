@@ -7,6 +7,8 @@ set -e
 VERSION="${VERSION:-1.0.0}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 RUNTIME="linux-x64"
+# Set to "true" to include debug symbols (larger package, enables debugging coredumps)
+INCLUDE_SYMBOLS="${INCLUDE_SYMBOLS:-true}"
 
 # Colors
 RED='\033[0;31m'
@@ -26,6 +28,7 @@ PROJECT_FILE="$PROJECT_DIR/Canopy.Linux.csproj"
 echo -e "${CYAN}=== Canopy Linux Build ===${NC}"
 echo "Version: $VERSION"
 echo "Runtime: $RUNTIME"
+echo "Include Debug Symbols: $INCLUDE_SYMBOLS"
 echo ""
 
 # Check .NET SDK
@@ -45,17 +48,31 @@ PUBLISH_DIR="$DIST_DIR/publish"
 PACKAGE_NAME="canopy-$VERSION-linux-x64"
 PACKAGE_DIR="$DIST_DIR/$PACKAGE_NAME"
 
-# Build
+# Build with or without symbols
 echo -e "${YELLOW}Building...${NC}"
-dotnet publish "$PROJECT_FILE" \
-    -c "$CONFIGURATION" \
-    -r "$RUNTIME" \
-    -o "$PUBLISH_DIR" \
-    --self-contained true \
-    -p:Version="$VERSION" \
-    -p:PublishSingleFile=false \
-    -p:DebugType=none \
-    -p:DebugSymbols=false
+if [ "$INCLUDE_SYMBOLS" = "true" ]; then
+    # Include portable PDB symbols for debugging coredumps
+    dotnet publish "$PROJECT_FILE" \
+        -c "$CONFIGURATION" \
+        -r "$RUNTIME" \
+        -o "$PUBLISH_DIR" \
+        --self-contained true \
+        -p:Version="$VERSION" \
+        -p:PublishSingleFile=false \
+        -p:DebugType=portable \
+        -p:DebugSymbols=true
+else
+    # Strip symbols for smaller package
+    dotnet publish "$PROJECT_FILE" \
+        -c "$CONFIGURATION" \
+        -r "$RUNTIME" \
+        -o "$PUBLISH_DIR" \
+        --self-contained true \
+        -p:Version="$VERSION" \
+        -p:PublishSingleFile=false \
+        -p:DebugType=none \
+        -p:DebugSymbols=false
+fi
 
 echo -e "${GREEN}Build successful${NC}"
 
@@ -147,12 +164,26 @@ rm -rf "$PUBLISH_DIR"
 
 ARCHIVE_SIZE=$(du -h "$PACKAGE_NAME.tar.gz" | cut -f1)
 
+# Count PDB files if symbols included
+PDB_COUNT=0
+if [ "$INCLUDE_SYMBOLS" = "true" ]; then
+    PDB_COUNT=$(find "$PACKAGE_DIR" -name "*.pdb" | wc -l)
+fi
+
 echo ""
 echo -e "${GREEN}=== Build Complete ===${NC}"
 echo ""
 echo -e "Output: ${CYAN}$DIST_DIR/$PACKAGE_NAME.tar.gz${NC} ($ARCHIVE_SIZE)"
+if [ "$INCLUDE_SYMBOLS" = "true" ]; then
+    echo -e "Debug symbols: ${CYAN}$PDB_COUNT PDB files included${NC}"
+    echo ""
+    echo -e "${YELLOW}To debug a coredump:${NC}"
+    echo "  1. Get the coredump: coredumpctl -o canopy.core dump canopy"
+    echo "  2. Debug with: dotnet-dump analyze canopy.core"
+    echo "     or: lldb -c canopy.core ~/.local/share/canopy/Canopy.Linux"
+fi
 echo ""
 echo "Install options:"
 echo "  1. Extract and run install.sh"
-echo "  2. Arch Linux: yay -S canopy-bin"
+echo "  2. curl -fsSL .../scripts/install.sh | bash"
 echo ""

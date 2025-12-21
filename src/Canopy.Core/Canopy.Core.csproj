@@ -11,8 +11,19 @@
     <Authors>Canopy Contributors</Authors>
     <Description>Cross-platform core library for Canopy game overlay application</Description>
     <Copyright>Copyright © 2024 Canopy Contributors</Copyright>
-    <RepositoryUrl>https://github.com/your-org/canopy-sharp</RepositoryUrl>
+    <RepositoryUrl>https://github.com/dev-ov2/canopy-sharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    
+    <!-- Debug symbols for Release builds -->
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <!-- Release-specific: Keep symbols but optimize -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>true</Optimize>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>

@@ -22,6 +22,18 @@
     
     <!-- Application icon -->
     <ApplicationIcon>Assets\canopy.ico</ApplicationIcon>
+    
+    <!-- Debug symbols for Release builds - enables debugging coredumps -->
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <!-- Release-specific: Keep symbols but optimize -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <Optimize>true</Optimize>
+    <!-- Portable PDB works cross-platform and with coredumpctl -->
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>
