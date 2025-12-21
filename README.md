@@ -28,6 +28,23 @@ cd canopy-*-linux-x64
 ./install.sh
 ```
 
+### Linux Dependencies
+
+```bash
+# Arch Linux
+sudo pacman -S gtk3 webkit2gtk libayatana-appindicator
+
+# Ubuntu/Debian
+sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37 libayatana-appindicator3-1
+
+# Fedora
+sudo dnf install gtk3 webkit2gtk3 libayatana-appindicator-gtk3
+
+# GNOME (for system tray support)
+sudo pacman -S gnome-shell-extension-appindicator  # Arch
+sudo apt install gnome-shell-extension-appindicator  # Ubuntu
+```
+
 ## Features
 
 ### Windows ✅
@@ -77,23 +94,36 @@ src/
 
 ### Linux Crashes
 
-If Canopy crashes, you can generate a crash report:
+If Canopy crashes, generate a detailed crash report:
 
 ```bash
 # Download and run the diagnosis script
 curl -fsSL https://raw.githubusercontent.com/dev-ov2/canopy-sharp/main/scripts/diagnose-crash.sh | bash
 ```
 
-This will:
-1. Find recent coredumps
-2. Extract stack traces (if dotnet-dump is installed)
-3. Collect system info and logs
-4. Save a report to `~/canopy-crash-report/`
+This collects:
+- Coredump with stack traces
+- System info (GTK, WebKit versions)
+- Canopy logs
+- Environment details
 
-To install dotnet-dump for better crash analysis:
+**For better stack traces**, install dotnet-dump:
 ```bash
 dotnet tool install -g dotnet-dump
 ```
+
+**If you see `??` in stack traces**, debug symbols (PDB files) are missing. Reinstall Canopy from the latest release.
+
+### System Tray Not Showing
+
+Canopy tries these AppIndicator libraries in order:
+1. `libayatana-appindicator` (preferred)
+2. `libayatana-appindicator3`
+3. `libappindicator3` (legacy)
+
+Install the appropriate package for your distro (see Dependencies above).
+
+On GNOME, you also need the AppIndicator extension enabled.
 
 ## Uninstall
 

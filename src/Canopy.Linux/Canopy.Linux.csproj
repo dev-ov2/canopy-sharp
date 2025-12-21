@@ -23,17 +23,47 @@
     <!-- Application icon -->
     <ApplicationIcon>Assets\canopy.ico</ApplicationIcon>
     
-    <!-- Debug symbols for Release builds - enables debugging coredumps -->
+    <!-- 
+    Enhanced Debug Symbols for coredump analysis
+    - DebugType=portable: Cross-platform PDB format, works with dotnet-dump and lldb
+    - DebugSymbols=true: Include symbol information
+    - Deterministic=false: Include full source paths for debugging
+    - PathMap: Not used to preserve original paths in stack traces
+    -->
     <DebugSymbols>true</DebugSymbols>
     <DebugType>portable</DebugType>
+    
+    <!-- Preserve method names and line numbers in stack traces -->
+    <Optimize>false</Optimize>
   </PropertyGroup>
 
-  <!-- Release-specific: Keep symbols but optimize -->
-  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <Optimize>true</Optimize>
-    <!-- Portable PDB works cross-platform and with coredumpctl -->
+  <!-- Debug configuration: Full debugging support -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <Optimize>false</Optimize>
     <DebugType>portable</DebugType>
     <DebugSymbols>true</DebugSymbols>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Release configuration: Keep symbols for crash analysis -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Enable optimization but keep debugging info -->
+    <Optimize>true</Optimize>
+    
+    <!-- Portable PDB - works with coredumpctl, dotnet-dump, lldb -->
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    
+    <!-- Embed sources for debugging without source files -->
+    <EmbedAllSources>true</EmbedAllSources>
+    
+    <!-- Don't trim unused code - ensures complete stack traces -->
+    <PublishTrimmed>false</PublishTrimmed>
+    
+    <!-- Include PDB in publish output -->
+    <CopyDebugSymbolFilesFromPackages>true</CopyDebugSymbolFilesFromPackages>
+    
+    <DefineConstants>TRACE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

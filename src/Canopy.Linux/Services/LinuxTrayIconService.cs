@@ -7,11 +7,16 @@ using Gtk;
 namespace Canopy.Linux.Services;
 
 /// <summary>
-/// Linux system tray icon service using AppIndicator (libayatana-appindicator).
+/// Linux system tray icon service using AppIndicator.
+/// 
+/// Tries multiple library variants in order:
+/// 1. libayatana-appindicator-glib (GLib-only, lighter)
+/// 2. libayatana-appindicator3 (GTK3 variant)
+/// 3. libappindicator3 (legacy Ubuntu)
 /// 
 /// For Arch Linux / CachyOS:
-/// - Requires libayatana-appindicator3 package
-/// - On GNOME, requires gnome-shell-extension-appindicator
+/// - Install: sudo pacman -S libayatana-appindicator
+/// - On GNOME: sudo pacman -S gnome-shell-extension-appindicator
 /// </summary>
 public class LinuxTrayIconService : ITrayIconService
 {
@@ -21,6 +26,15 @@ public class LinuxTrayIconService : ITrayIconService
     private bool _initialized;
     
     private IntPtr _appIndicator = IntPtr.Zero;
+    private AppIndicatorLibrary _activeLibrary = AppIndicatorLibrary.None;
+
+    private enum AppIndicatorLibrary
+    {
+        None,
+        AyatanaGlib,
+        AyatanaGtk3,
+        LegacyGtk3
+    }
 
     public event EventHandler? ShowWindowRequested;
     public event EventHandler? SettingsRequested;
@@ -53,16 +67,18 @@ public class LinuxTrayIconService : ITrayIconService
             // Create context menu (required for AppIndicator)
             CreateContextMenu();
 
-            // Try to initialize AppIndicator
+            // Try to initialize AppIndicator with various libraries
             if (TryInitializeAppIndicator())
             {
-                _logger.Info("Tray icon initialized successfully");
+                _logger.Info($"Tray icon initialized successfully using {_activeLibrary}");
                 return;
             }
             
-            _logger.Warning("AppIndicator initialization failed");
-            _logger.Warning("Install: sudo pacman -S libayatana-appindicator3");
-            _logger.Warning("On GNOME: sudo pacman -S gnome-shell-extension-appindicator");
+            _logger.Warning("AppIndicator initialization failed - no compatible library found");
+            _logger.Warning("Install one of:");
+            _logger.Warning("  Arch: sudo pacman -S libayatana-appindicator");
+            _logger.Warning("  Ubuntu: sudo apt install libayatana-appindicator3-1");
+            _logger.Warning("On GNOME also install: gnome-shell-extension-appindicator");
         }
         catch (Exception ex)
         {
@@ -72,66 +88,120 @@ public class LinuxTrayIconService : ITrayIconService
 
     private bool TryInitializeAppIndicator()
     {
+        // Get icon path
+        var iconPath = AppIconManager.GetIconPath();
+        string iconArg;
+        
+        if (iconPath != null && File.Exists(iconPath))
+        {
+            // AppIndicator expects path without extension for some variants
+            iconArg = iconPath.EndsWith(".png") 
+                ? iconPath.Substring(0, iconPath.Length - 4) 
+                : iconPath;
+            _logger.Debug($"Using icon path: {iconArg}");
+        }
+        else
+        {
+            iconArg = "applications-games";
+            _logger.Warning($"Icon not found, using fallback: {iconArg}");
+        }
+
+        // Try each library variant in order of preference
+        
+        // 1. Try libayatana-appindicator (GLib variant - lighter weight)
+        if (TryLibrary(AppIndicatorLibrary.AyatanaGlib, iconArg))
+            return true;
+            
+        // 2. Try libayatana-appindicator3 (GTK3 variant)
+        if (TryLibrary(AppIndicatorLibrary.AyatanaGtk3, iconArg))
+            return true;
+            
+        // 3. Try legacy libappindicator3 (Ubuntu)
+        if (TryLibrary(AppIndicatorLibrary.LegacyGtk3, iconArg))
+            return true;
+
+        return false;
+    }
+
+    private bool TryLibrary(AppIndicatorLibrary library, string iconArg)
+    {
         try
         {
-            // Get icon - AppIndicator can use:
-            // 1. An icon name from the theme (e.g., "firefox")
-            // 2. An absolute path to an icon file
-            var iconPath = AppIconManager.GetIconPath();
-            string iconArg;
+            _logger.Debug($"Trying {library}...");
             
-            if (iconPath != null && File.Exists(iconPath))
+            _appIndicator = library switch
             {
-                // Use absolute path - this is the most reliable method
-                // Remove the .png extension as AppIndicator adds it
-                iconArg = iconPath.EndsWith(".png") 
-                    ? iconPath.Substring(0, iconPath.Length - 4) 
-                    : iconPath;
-                _logger.Debug($"Using icon path: {iconArg}");
-            }
-            else
-            {
-                // Fallback to system icon
-                iconArg = "applications-games";
-                _logger.Warning($"Icon not found, using fallback: {iconArg}");
-            }
-
-            // Create AppIndicator
-            // Category 0 = ApplicationStatus
-            _appIndicator = app_indicator_new("canopy", iconArg, 0);
+                AppIndicatorLibrary.AyatanaGlib => ayatana_glib_app_indicator_new("canopy", iconArg, 0),
+                AppIndicatorLibrary.AyatanaGtk3 => ayatana_gtk3_app_indicator_new("canopy", iconArg, 0),
+                AppIndicatorLibrary.LegacyGtk3 => legacy_gtk3_app_indicator_new("canopy", iconArg, 0),
+                _ => IntPtr.Zero
+            };
 
             if (_appIndicator == IntPtr.Zero)
             {
-                _logger.Warning("app_indicator_new returned null");
+                _logger.Debug($"{library}: app_indicator_new returned null");
                 return false;
             }
 
             // Set status to Active (1)
-            app_indicator_set_status(_appIndicator, 1);
+            SetStatus(library, _appIndicator, 1);
             
-            // Set the menu (required)
+            // Set the menu
             if (_contextMenu != null)
             {
-                app_indicator_set_menu(_appIndicator, _contextMenu.Handle);
+                SetMenu(library, _appIndicator, _contextMenu.Handle);
             }
 
-            _logger.Debug("AppIndicator created successfully");
+            _activeLibrary = library;
+            _logger.Info($"Successfully initialized {library}");
             return true;
         }
         catch (DllNotFoundException ex)
         {
-            _logger.Debug($"AppIndicator library not found: {ex.Message}");
+            _logger.Debug($"{library}: Library not found - {ex.Message}");
             return false;
         }
         catch (EntryPointNotFoundException ex)
         {
-            _logger.Debug($"AppIndicator function not found: {ex.Message}");
+            _logger.Debug($"{library}: Entry point not found - {ex.Message}");
             return false;
         }
         catch (Exception ex)
         {
-            _logger.Warning($"AppIndicator initialization failed: {ex.Message}");
+            _logger.Debug($"{library}: Failed - {ex.Message}");
             return false;
+        }
+    }
+
+    private static void SetStatus(AppIndicatorLibrary library, IntPtr indicator, int status)
+    {
+        switch (library)
+        {
+            case AppIndicatorLibrary.AyatanaGlib:
+                ayatana_glib_app_indicator_set_status(indicator, status);
+                break;
+            case AppIndicatorLibrary.AyatanaGtk3:
+                ayatana_gtk3_app_indicator_set_status(indicator, status);
+                break;
+            case AppIndicatorLibrary.LegacyGtk3:
+                legacy_gtk3_app_indicator_set_status(indicator, status);
+                break;
+        }
+    }
+
+    private static void SetMenu(AppIndicatorLibrary library, IntPtr indicator, IntPtr menu)
+    {
+        switch (library)
+        {
+            case AppIndicatorLibrary.AyatanaGlib:
+                ayatana_glib_app_indicator_set_menu(indicator, menu);
+                break;
+            case AppIndicatorLibrary.AyatanaGtk3:
+                ayatana_gtk3_app_indicator_set_menu(indicator, menu);
+                break;
+            case AppIndicatorLibrary.LegacyGtk3:
+                legacy_gtk3_app_indicator_set_menu(indicator, menu);
+                break;
         }
     }
 
@@ -192,7 +262,7 @@ public class LinuxTrayIconService : ITrayIconService
 
     public void SetTooltip(string text)
     {
-        // AppIndicator doesn't support dynamic tooltips
+        // AppIndicator doesn't support dynamic tooltips in most variants
     }
 
     private static string EscapeShellArg(string arg)
@@ -213,63 +283,37 @@ public class LinuxTrayIconService : ITrayIconService
 
     #region AppIndicator P/Invoke
 
-    // Wrapper functions that try both library variants
-    private static IntPtr app_indicator_new(string id, string iconName, int category)
-    {
-        // Try ayatana first (Arch, modern distros)
-        try 
-        { 
-            return ayatana_app_indicator_new(id, iconName, category); 
-        }
-        catch (DllNotFoundException) { }
-        
-        // Try ubuntu/older
-        try 
-        { 
-            return ubuntu_app_indicator_new(id, iconName, category); 
-        }
-        catch (DllNotFoundException) { }
-        
-        return IntPtr.Zero;
-    }
+    // libayatana-appindicator (GLib variant - preferred)
+    // Package: libayatana-appindicator on Arch
+    [DllImport("libayatana-appindicator.so.1", EntryPoint = "app_indicator_new")]
+    private static extern IntPtr ayatana_glib_app_indicator_new(string id, string iconName, int category);
+    
+    [DllImport("libayatana-appindicator.so.1", EntryPoint = "app_indicator_set_status")]
+    private static extern void ayatana_glib_app_indicator_set_status(IntPtr indicator, int status);
+    
+    [DllImport("libayatana-appindicator.so.1", EntryPoint = "app_indicator_set_menu")]
+    private static extern void ayatana_glib_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
-    private static void app_indicator_set_status(IntPtr indicator, int status)
-    {
-        try { ayatana_app_indicator_set_status(indicator, status); return; }
-        catch (DllNotFoundException) { }
-        
-        try { ubuntu_app_indicator_set_status(indicator, status); }
-        catch (DllNotFoundException) { }
-    }
-
-    private static void app_indicator_set_menu(IntPtr indicator, IntPtr menu)
-    {
-        try { ayatana_app_indicator_set_menu(indicator, menu); return; }
-        catch (DllNotFoundException) { }
-        
-        try { ubuntu_app_indicator_set_menu(indicator, menu); }
-        catch (DllNotFoundException) { }
-    }
-
-    // Ayatana AppIndicator (Arch, modern distros)
+    // libayatana-appindicator3 (GTK3 variant)
+    // Package: libayatana-appindicator-gtk3 on Arch
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_new")]
-    private static extern IntPtr ayatana_app_indicator_new(string id, string iconName, int category);
+    private static extern IntPtr ayatana_gtk3_app_indicator_new(string id, string iconName, int category);
     
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_status")]
-    private static extern void ayatana_app_indicator_set_status(IntPtr indicator, int status);
+    private static extern void ayatana_gtk3_app_indicator_set_status(IntPtr indicator, int status);
     
     [DllImport("libayatana-appindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
-    private static extern void ayatana_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
+    private static extern void ayatana_gtk3_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
-    // Ubuntu/older AppIndicator
+    // Legacy libappindicator3 (Ubuntu/older)
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_new")]
-    private static extern IntPtr ubuntu_app_indicator_new(string id, string iconName, int category);
+    private static extern IntPtr legacy_gtk3_app_indicator_new(string id, string iconName, int category);
     
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_status")]
-    private static extern void ubuntu_app_indicator_set_status(IntPtr indicator, int status);
+    private static extern void legacy_gtk3_app_indicator_set_status(IntPtr indicator, int status);
     
     [DllImport("libappindicator3.so.1", EntryPoint = "app_indicator_set_menu")]
-    private static extern void ubuntu_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
+    private static extern void legacy_gtk3_app_indicator_set_menu(IntPtr indicator, IntPtr menu);
 
     #endregion
 }

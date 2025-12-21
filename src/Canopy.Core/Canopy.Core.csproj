@@ -14,16 +14,26 @@
     <RepositoryUrl>https://github.com/dev-ov2/canopy-sharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     
-    <!-- Debug symbols for Release builds -->
+    <!-- Debug symbols for all configurations -->
     <DebugSymbols>true</DebugSymbols>
     <DebugType>portable</DebugType>
   </PropertyGroup>
 
-  <!-- Release-specific: Keep symbols but optimize -->
+  <!-- Debug configuration -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <Optimize>false</Optimize>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Release configuration: Keep symbols for crash analysis -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <Optimize>true</Optimize>
     <DebugType>portable</DebugType>
     <DebugSymbols>true</DebugSymbols>
+    <EmbedAllSources>true</EmbedAllSources>
+    <DefineConstants>TRACE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
