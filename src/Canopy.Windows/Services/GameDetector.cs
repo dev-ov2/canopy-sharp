@@ -17,6 +17,7 @@ public class GameDetector : IGameDetector
     private readonly HashSet<string> _runningGameIds = new();
     private IReadOnlyList<DetectedGame> _monitoredGames = Array.Empty<DetectedGame>();
     private bool _isMonitoring;
+    private bool _hasDeepSearchGames;
 
     // Win32 constants
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
@@ -42,6 +43,14 @@ public class GameDetector : IGameDetector
 
     public IReadOnlyList<RunningProcess> GetRunningProcesses()
     {
+        return GetRunningProcessesInternal(includeExtendedInfo: false);
+    }
+
+    /// <summary>
+    /// Gets running processes with optional extended info for deep search
+    /// </summary>
+    private IReadOnlyList<RunningProcess> GetRunningProcessesInternal(bool includeExtendedInfo)
+    {
         var processes = new List<RunningProcess>();
 
         foreach (var process in Process.GetProcesses())
@@ -55,14 +64,23 @@ public class GameDetector : IGameDetector
                     continue;
                 }
 
-                processes.Add(new RunningProcess
+                var exePath = GetProcessPath(process.Id);
+                var runningProcess = new RunningProcess
                 {
                     ProcessId = process.Id,
                     ProcessName = process.ProcessName,
-                    ExecutablePath = GetProcessPath(process.Id),
+                    ExecutablePath = exePath,
                     WindowTitle = GetWindowTitleSafe(process),
                     StartTime = GetStartTimeSafe(process)
-                });
+                };
+
+                // Only gather extended info if needed (it's more expensive)
+                if (includeExtendedInfo && !string.IsNullOrEmpty(exePath))
+                {
+                    PopulateExtendedInfo(runningProcess, process, exePath);
+                }
+
+                processes.Add(runningProcess);
             }
             catch
             {
@@ -77,8 +95,44 @@ public class GameDetector : IGameDetector
         return processes.AsReadOnly();
     }
 
+    /// <summary>
+    /// Populates extended process info from file version info
+    /// </summary>
+    private void PopulateExtendedInfo(RunningProcess runningProcess, Process process, string exePath)
+    {
+        try
+        {
+            var versionInfo = FileVersionInfo.GetVersionInfo(exePath);
+            runningProcess.FileDescription = versionInfo.FileDescription;
+            runningProcess.ProductName = versionInfo.ProductName;
+            runningProcess.CompanyName = versionInfo.CompanyName;
+        }
+        catch
+        {
+            // File version info may not be accessible
+        }
+
+        // Use the executable path as a fallback for command line search
+        // Full command line retrieval requires WMI or elevated access
+        runningProcess.CommandLine = exePath;
+    }
+
     public bool IsGameRunning(DetectedGame game)
     {
+        // Try deep search first (if configured)
+        if (game.DeepSearchPatterns?.Length > 0)
+        {
+            if (IsProcessRunningByDeepSearch(game.DeepSearchPatterns))
+                return true;
+        }
+
+        // Try matching by process names (for remote mappings)
+        if (game.ProcessNames?.Length > 0)
+        {
+            if (IsProcessRunningByName(game.ProcessNames))
+                return true;
+        }
+
         // Try matching by InstallPath (any exe running from the game's install directory)
         if (!string.IsNullOrEmpty(game.InstallPath))
         {
@@ -118,6 +172,54 @@ public class GameDetector : IGameDetector
             }
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if any process matches the deep search patterns
+    /// </summary>
+    private bool IsProcessRunningByDeepSearch(string[] patterns)
+    {
+        var processes = GetRunningProcessesInternal(includeExtendedInfo: true);
+        
+        foreach (var process in processes)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (process.MatchesDeepSearch(pattern))
+                {
+                    _logger.Debug($"Deep search matched: pattern='{pattern}' on process={process.ProcessName}");
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if any process with the given names is running
+    /// </summary>
+    private bool IsProcessRunningByName(string[] processNames)
+    {
+        foreach (var processName in processNames)
+        {
+            try
+            {
+                var processes = Process.GetProcessesByName(processName);
+                if (processes.Any(p =>
+                {
+                    try { return p.SessionId != 0; }
+                    finally { p.Dispose(); }
+                }))
+                {
+                    return true;
+                }
+            }
+            catch
+            {
+                // Process enumeration may fail
+            }
+        }
         return false;
     }
 
@@ -287,6 +389,13 @@ public class GameDetector : IGameDetector
     {
         _monitoredGames = games.ToList().AsReadOnly();
         _runningGameIds.Clear();
+        
+        // Check if any games use deep search (affects performance)
+        _hasDeepSearchGames = _monitoredGames.Any(g => g.DeepSearchPatterns?.Length > 0);
+        if (_hasDeepSearchGames)
+        {
+            _logger.Debug("Deep search games detected - extended process info will be collected");
+        }
 
         _logger.Info($"Starting game monitoring for {_monitoredGames.Count} games");
 
@@ -311,12 +420,19 @@ public class GameDetector : IGameDetector
 
         try
         {
-            // Get all process paths once per poll cycle
-            var allProcesses = GetAllProcessPaths();
+            // Get processes - include extended info only if needed
+            IReadOnlyList<RunningProcess>? extendedProcesses = null;
+            if (_hasDeepSearchGames)
+            {
+                extendedProcesses = GetRunningProcessesInternal(includeExtendedInfo: true);
+            }
+
+            // Get all process paths once per poll cycle for path-based detection
+            var allProcessPaths = GetAllProcessPaths();
 
             foreach (var game in _monitoredGames)
             {
-                var isRunning = IsGameRunningCached(game, allProcesses);
+                var isRunning = IsGameRunningCached(game, allProcessPaths, extendedProcesses);
                 var wasRunning = _runningGameIds.Contains(game.Id);
 
                 if (isRunning && !wasRunning)
@@ -342,15 +458,38 @@ public class GameDetector : IGameDetector
     }
 
     /// <summary>
-    /// Checks if a game is running using a cached process list.
+    /// Checks if a game is running using cached process lists.
     /// </summary>
-    private bool IsGameRunningCached(DetectedGame game, IReadOnlyList<(int Pid, string? Path)> cachedProcesses)
+    private bool IsGameRunningCached(
+        DetectedGame game, 
+        IReadOnlyList<(int Pid, string? Path)> cachedProcessPaths,
+        IReadOnlyList<RunningProcess>? extendedProcesses)
     {
+        // Try deep search first (if configured and we have extended process info)
+        if (game.DeepSearchPatterns?.Length > 0 && extendedProcesses != null)
+        {
+            foreach (var process in extendedProcesses)
+            {
+                foreach (var pattern in game.DeepSearchPatterns)
+                {
+                    if (process.MatchesDeepSearch(pattern))
+                        return true;
+                }
+            }
+        }
+
+        // Try matching by process names (for remote mappings)
+        if (game.ProcessNames?.Length > 0)
+        {
+            if (IsProcessRunningByName(game.ProcessNames))
+                return true;
+        }
+
         // Try matching by InstallPath
         if (!string.IsNullOrEmpty(game.InstallPath))
         {
             var normalizedInstallPath = NormalizePath(game.InstallPath);
-            foreach (var (_, processPath) in cachedProcesses)
+            foreach (var (_, processPath) in cachedProcessPaths)
             {
                 if (!string.IsNullOrEmpty(processPath) && IsPathWithinDirectory(processPath, normalizedInstallPath) && IsNotIgnored(processPath))
                     return true;
@@ -360,7 +499,7 @@ public class GameDetector : IGameDetector
         // Fallback to exact ExecutablePath match
         if (!string.IsNullOrEmpty(game.ExecutablePath))
         {
-            foreach (var (_, processPath) in cachedProcesses)
+            foreach (var (_, processPath) in cachedProcessPaths)
             {
                 if (string.Equals(processPath, game.ExecutablePath, StringComparison.OrdinalIgnoreCase))
                     return true;
@@ -444,7 +583,6 @@ public class GameDetector : IGameDetector
     {
         foreach (var element in SteamScanner.IgnoredPathElements)
         {
-
             if (filePath.Contains(element, StringComparison.CurrentCultureIgnoreCase)) return false;
         }
 

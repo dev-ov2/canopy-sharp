@@ -15,6 +15,7 @@ public class LinuxGameDetector : IGameDetector
     private readonly HashSet<string> _runningGameIds = new();
     private IReadOnlyList<DetectedGame> _monitoredGames = Array.Empty<DetectedGame>();
     private bool _isMonitoring;
+    private bool _hasDeepSearchGames;
 
     public event EventHandler<DetectedGame>? GameStarted;
     public event EventHandler<DetectedGame>? GameStopped;
@@ -26,6 +27,14 @@ public class LinuxGameDetector : IGameDetector
     }
 
     public IReadOnlyList<RunningProcess> GetRunningProcesses()
+    {
+        return GetRunningProcessesInternal(includeExtendedInfo: false);
+    }
+
+    /// <summary>
+    /// Gets running processes with optional extended info for deep search
+    /// </summary>
+    private IReadOnlyList<RunningProcess> GetRunningProcessesInternal(bool includeExtendedInfo)
     {
         var processes = new List<RunningProcess>();
 
@@ -39,7 +48,7 @@ public class LinuxGameDetector : IGameDetector
 
                 try
                 {
-                    var process = GetProcessInfo(pid);
+                    var process = GetProcessInfo(pid, includeExtendedInfo);
                     if (process != null)
                         processes.Add(process);
                 }
@@ -57,7 +66,7 @@ public class LinuxGameDetector : IGameDetector
         return processes.AsReadOnly();
     }
 
-    private RunningProcess? GetProcessInfo(int pid)
+    private RunningProcess? GetProcessInfo(int pid, bool includeExtendedInfo = false)
     {
         try
         {
@@ -67,22 +76,109 @@ public class LinuxGameDetector : IGameDetector
 
             var processName = Path.GetFileNameWithoutExtension(exePath);
             
-            // Try to get command line for window title
+            // Get command line - used for both WindowTitle and extended search
             var cmdline = GetProcessCmdline(pid);
             
-            return new RunningProcess
+            var runningProcess = new RunningProcess
             {
                 ProcessId = pid,
                 ProcessName = processName,
                 ExecutablePath = exePath,
                 WindowTitle = cmdline,
-                StartTime = GetProcessStartTime(pid)
+                StartTime = GetProcessStartTime(pid),
+                CommandLine = cmdline // Store full command line for deep search
             };
+
+            // Only gather extended info if needed
+            if (includeExtendedInfo)
+            {
+                PopulateExtendedInfo(runningProcess, pid, exePath);
+            }
+
+            return runningProcess;
         }
         catch(Exception ex)
         {
             _logger.Error("Received error while getting process info!", ex);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Populates extended process info from /proc and desktop files
+    /// </summary>
+    private void PopulateExtendedInfo(RunningProcess runningProcess, int pid, string exePath)
+    {
+        // Try to get process name from /proc/[pid]/comm (usually the binary name)
+        try
+        {
+            var commPath = $"/proc/{pid}/comm";
+            if (File.Exists(commPath))
+            {
+                var comm = File.ReadAllText(commPath).Trim();
+                // Use comm as ProductName if it differs from ProcessName
+                if (!string.IsNullOrEmpty(comm) && !string.Equals(comm, runningProcess.ProcessName, StringComparison.OrdinalIgnoreCase))
+                {
+                    runningProcess.ProductName = comm;
+                }
+            }
+        }
+        catch
+        {
+            // Ignore errors
+        }
+
+        // Try to get info from /proc/[pid]/status
+        try
+        {
+            var statusPath = $"/proc/{pid}/status";
+            if (File.Exists(statusPath))
+            {
+                var lines = File.ReadAllLines(statusPath);
+                foreach (var line in lines)
+                {
+                    if (line.StartsWith("Name:"))
+                    {
+                        var name = line.Substring(5).Trim();
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            runningProcess.FileDescription = name;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore errors
+        }
+
+        // Try to get environment variables that might identify the app
+        try
+        {
+            var environPath = $"/proc/{pid}/environ";
+            if (File.Exists(environPath))
+            {
+                var environ = File.ReadAllText(environPath);
+                var vars = environ.Split('\0');
+                
+                foreach (var envVar in vars)
+                {
+                    // Look for common identifying environment variables
+                    if (envVar.StartsWith("STEAM_COMPAT_CLIENT_INSTALL_PATH=") ||
+                        envVar.StartsWith("SteamAppId=") ||
+                        envVar.StartsWith("WINEPREFIX="))
+                    {
+                        // Append to command line for searchability
+                        runningProcess.CommandLine = $"{runningProcess.CommandLine} {envVar}";
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Environment may not be accessible
         }
     }
 
@@ -185,6 +281,20 @@ public class LinuxGameDetector : IGameDetector
 
     public bool IsGameRunning(DetectedGame game)
     {
+        // Try deep search first (if configured)
+        if (game.DeepSearchPatterns?.Length > 0)
+        {
+            if (IsProcessRunningByDeepSearch(game.DeepSearchPatterns))
+                return true;
+        }
+
+        // Try matching by process names (for remote mappings)
+        if (game.ProcessNames?.Length > 0)
+        {
+            if (IsProcessRunningByName(game.ProcessNames))
+                return true;
+        }
+
         // Try matching by InstallPath
         if (!string.IsNullOrEmpty(game.InstallPath))
         {
@@ -200,6 +310,43 @@ public class LinuxGameDetector : IGameDetector
                 string.Equals(p.ExecutablePath, game.ExecutablePath, StringComparison.OrdinalIgnoreCase));
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if any process matches the deep search patterns
+    /// </summary>
+    private bool IsProcessRunningByDeepSearch(string[] patterns)
+    {
+        var processes = GetRunningProcessesInternal(includeExtendedInfo: true);
+        
+        foreach (var process in processes)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (process.MatchesDeepSearch(pattern))
+                {
+                    _logger.Debug($"Deep search matched: pattern='{pattern}' on process={process.ProcessName}");
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if any process with the given names is running
+    /// </summary>
+    private bool IsProcessRunningByName(string[] processNames)
+    {
+        var processes = GetRunningProcesses();
+        foreach (var processName in processNames)
+        {
+            if (processes.Any(p => string.Equals(p.ProcessName, processName, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -260,6 +407,13 @@ public class LinuxGameDetector : IGameDetector
         _monitoredGames = games.ToList().AsReadOnly();
         _runningGameIds.Clear();
         
+        // Check if any games use deep search (affects performance)
+        _hasDeepSearchGames = _monitoredGames.Any(g => g.DeepSearchPatterns?.Length > 0);
+        if (_hasDeepSearchGames)
+        {
+            _logger.Debug("Deep search games detected - extended process info will be collected");
+        }
+        
         _logger.Info($"Starting game monitoring for {_monitoredGames.Count} games");
         
         _isMonitoring = true;
@@ -279,7 +433,8 @@ public class LinuxGameDetector : IGameDetector
 
         try
         {
-            var runningProcesses = GetRunningProcesses();
+            // Get processes - include extended info only if needed
+            var runningProcesses = GetRunningProcessesInternal(includeExtendedInfo: _hasDeepSearchGames);
 
             foreach (var game in _monitoredGames)
             {
@@ -311,12 +466,36 @@ public class LinuxGameDetector : IGameDetector
 
     private bool IsGameRunningCached(DetectedGame game, IReadOnlyList<RunningProcess> processes)
     {
+        // Try deep search first (if configured)
+        if (game.DeepSearchPatterns?.Length > 0)
+        {
+            foreach (var process in processes)
+            {
+                foreach (var pattern in game.DeepSearchPatterns)
+                {
+                    if (process.MatchesDeepSearch(pattern))
+                        return true;
+                }
+            }
+        }
+
+        // Try matching by process names (for remote mappings)
+        if (game.ProcessNames?.Length > 0)
+        {
+            foreach (var processName in game.ProcessNames)
+            {
+                if (processes.Any(p => string.Equals(p.ProcessName, processName, StringComparison.OrdinalIgnoreCase)))
+                    return true;
+            }
+        }
+
         if (!string.IsNullOrEmpty(game.InstallPath))
         {
             var normalizedPath = NormalizePath(game.InstallPath);
             foreach (var process in processes)
             {
-                if (process.WindowTitle.Contains(normalizedPath)) {
+                if (process.WindowTitle?.Contains(normalizedPath) == true)
+                {
                     return true;
                 }
                 if (!string.IsNullOrEmpty(process.ExecutablePath) &&
@@ -325,7 +504,6 @@ public class LinuxGameDetector : IGameDetector
                     return true;
             }
         }
-
 
         if (!string.IsNullOrEmpty(game.ExecutablePath))
         {

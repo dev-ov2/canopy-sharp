@@ -9,6 +9,9 @@ namespace Canopy.Linux.Services;
 /// <summary>
 /// Linux system tray icon service using AppIndicator.
 /// 
+/// This service is OPTIONAL - the app will function without a tray icon.
+/// If initialization fails, the app continues without a tray.
+/// 
 /// Tries multiple library variants in order:
 /// 1. libayatana-appindicator-glib (GLib-only, recommended for new code)
 /// 2. libayatana-appindicator3 (GTK3 variant, deprecated but widely available)
@@ -24,6 +27,7 @@ public class LinuxTrayIconService : ITrayIconService
     private Menu? _contextMenu;
     private bool _isDisposed;
     private bool _initialized;
+    private bool _initializationFailed;
     
     private IntPtr _appIndicator = IntPtr.Zero;
     private AppIndicatorLibrary _activeLibrary = AppIndicatorLibrary.None;
@@ -41,6 +45,12 @@ public class LinuxTrayIconService : ITrayIconService
     public event EventHandler? RescanGamesRequested;
     public event EventHandler? QuitRequested;
 
+    /// <summary>
+    /// Indicates whether the tray icon was successfully initialized.
+    /// The app can function without a tray icon.
+    /// </summary>
+    public bool IsAvailable => _activeLibrary != AppIndicatorLibrary.None && !_initializationFailed;
+
     public LinuxTrayIconService()
     {
         _logger = CanopyLoggerFactory.CreateLogger<LinuxTrayIconService>();
@@ -51,6 +61,8 @@ public class LinuxTrayIconService : ITrayIconService
         if (_initialized) return;
         _initialized = true;
 
+        // Use GLib.Idle to ensure we're on the main thread
+        // But also set a flag so we don't block app startup
         GLib.Idle.Add(() =>
         {
             InitializeInternal();
@@ -62,27 +74,45 @@ public class LinuxTrayIconService : ITrayIconService
     {
         try
         {
-            _logger.Info("Initializing tray icon...");
+            _logger.Info("Initializing tray icon (optional feature)...");
             
-            // Create context menu (required for AppIndicator)
-            CreateContextMenu();
-
-            // Try to initialize AppIndicator with various libraries
-            if (TryInitializeAppIndicator())
+            // First, try to create the AppIndicator WITHOUT a menu
+            // This tests if the library is available before creating GTK widgets
+            if (!TryInitializeAppIndicator())
             {
-                _logger.Info($"Tray icon initialized successfully using {_activeLibrary}");
+                _initializationFailed = true;
+                _logger.Warning("AppIndicator initialization failed - tray icon disabled");
+                _logger.Warning("The app will continue without a system tray icon.");
+                _logger.Warning("Install one of:");
+                _logger.Warning("  Arch: sudo pacman -S libayatana-appindicator");
+                _logger.Warning("  Ubuntu: sudo apt install libayatana-appindicator3-1");
                 return;
             }
-            
-            _logger.Warning("AppIndicator initialization failed - no compatible library found");
-            _logger.Warning("Install one of:");
-            _logger.Warning("  Arch: sudo pacman -S libayatana-appindicator");
-            _logger.Warning("  Ubuntu: sudo apt install libayatana-appindicator3-1");
-            _logger.Warning("On GNOME also install: gnome-shell-extension-appindicator");
+
+            // Now create the context menu (only if AppIndicator worked)
+            try
+            {
+                CreateContextMenu();
+                
+                // Set the menu on the indicator
+                if (_contextMenu != null && _appIndicator != IntPtr.Zero)
+                {
+                    SetMenu(_activeLibrary, _appIndicator, _contextMenu.Handle);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Warning($"Failed to create tray menu: {ex.Message}");
+                _logger.Warning("Tray icon will be visible but menu may not work");
+            }
+
+            _logger.Info($"Tray icon initialized successfully using {_activeLibrary}");
         }
         catch (Exception ex)
         {
-            _logger.Error("Failed to initialize tray icon", ex);
+            _initializationFailed = true;
+            _logger.Warning($"Tray icon initialization failed: {ex.Message}");
+            _logger.Warning("The app will continue without a system tray icon.");
         }
     }
 
@@ -143,17 +173,11 @@ public class LinuxTrayIconService : ITrayIconService
                 return false;
             }
 
-            // Set status to Active (1)
+            // Set status to Active (1) - don't set menu yet
             SetStatus(library, _appIndicator, 1);
-            
-            // Set the menu
-            if (_contextMenu != null)
-            {
-                SetMenu(library, _appIndicator, _contextMenu.Handle);
-            }
 
             _activeLibrary = library;
-            _logger.Info($"Successfully initialized {library}");
+            _logger.Debug($"Successfully created AppIndicator with {library}");
             return true;
         }
         catch (DllNotFoundException ex)
@@ -210,23 +234,39 @@ public class LinuxTrayIconService : ITrayIconService
         _contextMenu = new Menu();
 
         var openItem = new MenuItem("Open Canopy");
-        openItem.Activated += (_, _) => ShowWindowRequested?.Invoke(this, EventArgs.Empty);
+        openItem.Activated += (_, _) => 
+        {
+            try { ShowWindowRequested?.Invoke(this, EventArgs.Empty); }
+            catch (Exception ex) { _logger.Warning($"ShowWindowRequested handler error: {ex.Message}"); }
+        };
         _contextMenu.Append(openItem);
 
         _contextMenu.Append(new SeparatorMenuItem());
 
         var rescanItem = new MenuItem("Rescan Games");
-        rescanItem.Activated += (_, _) => RescanGamesRequested?.Invoke(this, EventArgs.Empty);
+        rescanItem.Activated += (_, _) => 
+        {
+            try { RescanGamesRequested?.Invoke(this, EventArgs.Empty); }
+            catch (Exception ex) { _logger.Warning($"RescanGamesRequested handler error: {ex.Message}"); }
+        };
         _contextMenu.Append(rescanItem);
 
         var settingsItem = new MenuItem("Settings");
-        settingsItem.Activated += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        settingsItem.Activated += (_, _) => 
+        {
+            try { SettingsRequested?.Invoke(this, EventArgs.Empty); }
+            catch (Exception ex) { _logger.Warning($"SettingsRequested handler error: {ex.Message}"); }
+        };
         _contextMenu.Append(settingsItem);
 
         _contextMenu.Append(new SeparatorMenuItem());
 
         var quitItem = new MenuItem("Quit");
-        quitItem.Activated += (_, _) => QuitRequested?.Invoke(this, EventArgs.Empty);
+        quitItem.Activated += (_, _) => 
+        {
+            try { QuitRequested?.Invoke(this, EventArgs.Empty); }
+            catch (Exception ex) { _logger.Warning($"QuitRequested handler error: {ex.Message}"); }
+        };
         _contextMenu.Append(quitItem);
 
         _contextMenu.ShowAll();
@@ -234,6 +274,8 @@ public class LinuxTrayIconService : ITrayIconService
 
     public void ShowBalloon(string title, string message)
     {
+        // This uses notify-send, which is separate from the tray icon
+        // and works even if the tray icon failed to initialize
         try
         {
             var iconPath = AppIconManager.GetIconPath();
@@ -256,7 +298,7 @@ public class LinuxTrayIconService : ITrayIconService
         }
         catch (Exception ex)
         {
-            _logger.Error("Failed to show notification", ex);
+            _logger.Warning($"Failed to show notification: {ex.Message}");
         }
     }
 
@@ -275,7 +317,14 @@ public class LinuxTrayIconService : ITrayIconService
         if (_isDisposed) return;
         _isDisposed = true;
 
-        _contextMenu?.Dispose();
+        try
+        {
+            _contextMenu?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.Debug($"Error disposing context menu: {ex.Message}");
+        }
         _contextMenu = null;
 
         _logger.Info("Tray icon disposed");

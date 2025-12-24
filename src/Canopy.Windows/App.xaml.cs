@@ -304,6 +304,7 @@ public partial class App : Application
 
         // Game detection
         services.AddSingleton<IGameScanner, SteamScanner>();
+        services.AddSingleton<IGameScanner, RemoteMappingsScanner>();
         services.AddSingleton<IGameDetector, GameDetector>();
         services.AddSingleton<GameService>();
 

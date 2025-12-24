@@ -49,6 +49,20 @@ public class DetectedGame
     /// Total playtime in minutes
     /// </summary>
     public int? PlaytimeMinutes { get; set; }
+
+    /// <summary>
+    /// Process names to match for detecting if the game is running.
+    /// Used primarily for games detected from remote mappings.
+    /// Names should be without file extension.
+    /// </summary>
+    public string[]? ProcessNames { get; set; }
+
+    /// <summary>
+    /// Deep search patterns that match against extended process properties
+    /// (ProcessName, WindowTitle/MainWindowTitle, FileDescription, ProductName, CompanyName, CommandLine, ExecutablePath).
+    /// Case-insensitive substring matching is used.
+    /// </summary>
+    public string[]? DeepSearchPatterns { get; set; }
 }
 
 /// <summary>

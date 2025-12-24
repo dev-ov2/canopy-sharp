@@ -195,7 +195,7 @@ public class App : Gtk.Application
             gameService.GameStarted += OnGameStarted;
             gameService.GameStopped += OnGameStopped;
 
-            _ = Task.Run(async () =>
+            _= Task.Run(async () =>
             {
                 try
                 {
@@ -426,6 +426,7 @@ public class App : Gtk.Application
         services.AddSingleton<IHotkeyService>(sp => sp.GetRequiredService<LinuxHotkeyService>());
 
         services.AddSingleton<IGameScanner, SteamScanner>();
+        services.AddSingleton<IGameScanner, RemoteMappingsScanner>();
         services.AddSingleton<IGameDetector, LinuxGameDetector>();
         services.AddSingleton<GameService>();
 
