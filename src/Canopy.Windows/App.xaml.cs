@@ -10,11 +10,9 @@ using Canopy.Windows.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Windows.AppLifecycle;
-using System.Diagnostics;
 using Velopack;
-using Windows.ApplicationModel.Activation;
-using DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue;
 using AppSettings = Canopy.Core.Application.AppSettings;
+using DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue;
 using SingleInstanceGuard = Canopy.Core.Application.SingleInstanceGuard;
 
 namespace Canopy.Windows;
@@ -52,20 +50,20 @@ public partial class App : Application
         // Register protocol handler
         var exePath = Path.Combine(AppContext.BaseDirectory, "Canopy.Windows.exe");
         WindowsPlatformServices.RegisterProtocol("canopy", exePath);
-        
+
         // Subscribe to protocol activations from Program
         Program.ProtocolActivated += OnProtocolActivated;
-        
+
         _logger.Info("App initialized");
     }
 
     private void OnProtocolActivated(object? sender, Uri uri)
     {
         _logger.Debug($"Protocol activated: {uri}");
-        
+
         if (DispatcherQueue != null)
         {
-            DispatcherQueue.TryEnqueue(() => HandleProtocolActivation(uri));            
+            DispatcherQueue.TryEnqueue(() => HandleProtocolActivation(uri));
         }
     }
 
@@ -73,7 +71,7 @@ public partial class App : Application
     {
         _logger.Debug($"Handling protocol: {uri}");
         MainWindowInstance?.Activate();
-        
+
         if (_appCoordinator != null)
         {
             _ = _appCoordinator.HandleProtocolActivationAsync(uri);
@@ -102,7 +100,7 @@ public partial class App : Application
             _logger.Warning("Another instance is already running");
             var activationArgs = AppInstance.GetCurrent().GetActivatedEventArgs();
             var mainInstance = AppInstance.FindOrRegisterForKey("CanopyMainInstance");
-            
+
             if (!mainInstance.IsCurrent)
             {
                 await mainInstance.RedirectActivationToAsync(activationArgs);
@@ -130,7 +128,7 @@ public partial class App : Application
         var startMinimized = Environment.GetCommandLineArgs().Contains("--minimized");
         _mainWindow = Services.GetRequiredService<MainWindow>();
         MainWindowInstance = _mainWindow;
-        
+
         if (!startMinimized)
         {
             _mainWindow.Activate();
@@ -164,7 +162,7 @@ public partial class App : Application
         var updateService = Services.GetRequiredService<UpdateService>();
         updateService.UpdateAvailable += OnUpdateAvailable;
         updateService.UpdateError += OnUpdateError;
-        
+
         _logger.Info($"App startup complete. AutoUpdate={Services.GetRequiredService<ISettingsService>().Settings.AutoUpdate}");
     }
 
@@ -176,7 +174,7 @@ public partial class App : Application
     private void OnUpdateAvailable(object? sender, Services.UpdateInfo updateInfo)
     {
         _logger.Info($"OnUpdateAvailable fired: Version={updateInfo.Version}, IsVelopack={updateInfo.IsVelopackUpdate}");
-        
+
         DispatcherQueue.TryEnqueue(async () =>
         {
             try
@@ -251,21 +249,23 @@ public partial class App : Application
 
     private void SetupCoordinatorEvents()
     {
-        if (_appCoordinator == null) return;
+        if (_appCoordinator == null)
+            return;
 
-        _appCoordinator.ShowWindowRequested += (_, _) => 
+        _appCoordinator.ShowWindowRequested += (_, _) =>
             DispatcherQueue.TryEnqueue(() => _mainWindow?.Activate());
 
-        _appCoordinator.ShowSettingsRequested += (_, _) => 
+        _appCoordinator.ShowSettingsRequested += (_, _) =>
             DispatcherQueue.TryEnqueue(ShowSettingsWindow);
 
-        _appCoordinator.OverlayToggleRequested += (_, _) => 
+        _appCoordinator.OverlayToggleRequested += (_, _) =>
             DispatcherQueue.TryEnqueue(() => Services.GetRequiredService<OverlayWindow>().Toggle());
 
         _appCoordinator.OverlayDragToggleRequested += (_, _) => DispatcherQueue.TryEnqueue(() =>
         {
             var overlay = Services.GetRequiredService<OverlayWindow>();
-            if (overlay.IsVisible) overlay.ToggleDragMode();
+            if (overlay.IsVisible)
+                overlay.ToggleDragMode();
         });
 
         _appCoordinator.TokenReady += (_, e) => DispatcherQueue.TryEnqueue(async () =>
@@ -331,7 +331,7 @@ public partial class App : Application
     {
         var settings = Services.GetRequiredService<ISettingsService>().Settings;
         var platformServices = Services.GetRequiredService<WindowsPlatformServices>();
-        
+
         var isRegistered = platformServices.IsRegisteredForStartup();
         if (isRegistered != settings.StartWithWindows)
         {
@@ -353,7 +353,7 @@ public partial class App : Application
     {
         var hotkeyService = Services.GetRequiredService<HotkeyService>();
         var settings = Services.GetRequiredService<ISettingsService>().Settings;
-        
+
         if (_mainWindow != null)
         {
             hotkeyService.Initialize(_mainWindow);
@@ -385,7 +385,7 @@ public partial class App : Application
     public async Task ShutdownAsync()
     {
         _logger.Info("Shutting down...");
-        
+
         _appCoordinator?.Dispose();
         _trayIconService?.Dispose();
         Services.GetService<UpdateService>()?.Dispose();
@@ -397,7 +397,7 @@ public partial class App : Application
         }
 
         SingleInstanceGuard.Release();
-        
+
         _logger.Info("Shutdown complete");
     }
 }

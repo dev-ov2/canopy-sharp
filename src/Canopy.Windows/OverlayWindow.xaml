@@ -1,51 +1,183 @@
-<Window
+<winex:WindowEx
     x:Class="Canopy.Windows.OverlayWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Canopy.Windows"
-    Title="Canopy Overlay">
+    xmlns:winex="using:WinUIEx"
+    Title="Canopy Overlay"
+    IsShownInSwitchers="False"
+    IsAlwaysOnTop="True"
+    IsResizable="False"
+    IsMaximizable="False"
+    IsMinimizable="False"
+    IsTitleBarVisible="False">
 
-    <Grid x:Name="Root" Background="Transparent">
+  <Window.SystemBackdrop>
+    <winex:TransparentTintBackdrop TintColor="#AA000000" />
+  </Window.SystemBackdrop>
+
+  <Grid x:Name="Root" Background="Transparent">
     <!-- Border/frame image overlay - rendered ON TOP of content, not behind -->
     <Image x:Name="OverlayBorder"
-               Width="280"
-               Height="520"
+               x:FieldModifier="internal"
                IsHitTestVisible="False"
                Visibility="Collapsed"
                Stretch="Fill"
+               Opacity="0.25"
                HorizontalAlignment="Center"
-               VerticalAlignment="Center" />
+               VerticalAlignment="Center"/>
 
-    <!-- Main overlay card -->
-        <Border Background="#C8000000"
+    <!-- ==================== COMPACT OVERLAY (Vertical Toolbar - 64x240) ==================== -->
+    <Border x:Name="CompactLayout"
+                Background="#00000000"
+                CornerRadius="8"
+                BorderBrush="#00FFFFFF"
+                Margin="2"
+                Padding="6,8"
+                Visibility="Visible">
+      <Grid RowSpacing="6">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="48"/>
+          <RowDefinition Height="60"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Spacing="4" Padding="0,0,0,16">
+          <TextBlock x:Name="CompactGameNameText"
+                 Text="No game running"
+                                         TextWrapping="WrapWholeWords"
+                     TextAlignment="Center"
+                 Foreground="White"
+                 FontSize="11"
+                 FontWeight="SemiBold"
+                 HorizontalAlignment="Center"/>
+          <TextBlock x:Name="CompactGameStatusText"
+                 Text="sleeping - start a game to wake"
+                     TextWrapping="WrapWholeWords"
+                     TextAlignment="Center"
+                 Foreground="#80FFFFFF"
+                 FontSize="10"
+                 HorizontalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Top: Points counter with animated rings -->
+        <Grid Grid.Row="1" Width="80" Height="60" HorizontalAlignment="Center">
+          <!-- Animated rings (tiny for compact) -->
+          <Border Background="#44FFFFFF"
+                            Width="30"
+                            Height="30"
+                            CornerRadius="100"
+                            Opacity="0.9"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"/>
+
+          <Border Background="#44FFFFFF"
+                            Width="40"
+                            Height="40"
+                            CornerRadius="100"
+                            Opacity="0.6"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"/>
+
+          <Border x:Name="CompactAnimatedBorder"
+                            Background="#44FFFFFF"
+                            Width="60"
+                            Height="60"
+                            CornerRadius="100"
+                            Opacity="0.8"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            RenderTransformOrigin="0.5,0.5">
+            <Border.RenderTransform>
+              <ScaleTransform x:Name="CompactAnimatedScale" ScaleX="1" ScaleY="1"/>
+            </Border.RenderTransform>
+          </Border>
+
+          <!-- Points display -->
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="-2">
+            <TextBlock x:Name="CompactPointsText" 
+                                   Text="--" 
+                                   Foreground="White" 
+                                   FontSize="20" 
+                                   FontWeight="Bold" 
+                                   HorizontalAlignment="Center"/>
+            <TextBlock Text="PTS" 
+                                   Foreground="#80FFFFFF" 
+                                   FontSize="12" 
+                                   HorizontalAlignment="Center"/>
+          </StackPanel>
+        </Grid>
+
+        <!-- Bottom: Stats with icons in a vertical stack -->
+        <StackPanel Grid.Row="2" Spacing="8" VerticalAlignment="Center">
+          <!-- Stat 1: Total Points - Star icon -->
+          <StackPanel Spacing="0" HorizontalAlignment="Center">
+            <TextBlock x:Name="CompactStat1Label" Text="--" Foreground="#80FFFFFF" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+            <TextBlock x:Name="CompactStat1Value" Text="--" Foreground="White" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+          </StackPanel>
+
+          <!-- Stat 2: Donations - Heart icon -->
+          <StackPanel Spacing="0" HorizontalAlignment="Center">
+            <TextBlock x:Name="CompactStat2Label" Text="--" Foreground="#80FFFFFF"  FontSize="11" FontWeight="SemiBold"/>
+            <StackPanel Orientation="Horizontal" Spacing="1" HorizontalAlignment="Center">
+              <TextBlock x:Name="CompactStat2Value" Text="--" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+              <TextBlock x:Name="CompactStat2SubValue" Text="" Foreground="LightGreen" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Bottom"/>
+            </StackPanel>
+          </StackPanel>
+
+          <!-- Stat 3: Progress - Target/bullseye icon -->
+          <StackPanel Spacing="0" HorizontalAlignment="Center">
+            <TextBlock x:Name="CompactStat3Label" Text="--" Foreground="#80FFFFFF" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+            <TextBlock x:Name="CompactStat3Value" Text="--" Foreground="White" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+          </StackPanel>
+
+          <!-- Stat 4: Community - People icon -->
+          <StackPanel Spacing="0" HorizontalAlignment="Center">
+            <TextBlock x:Name="CompactStat4Label" Text="--" Foreground="#80FFFFFF" FontSize="11" FontWeight="SemiBold"/>
+            <StackPanel Orientation="Horizontal" Spacing="1" HorizontalAlignment="Center">
+              <TextBlock x:Name="CompactStat4Value" Text="--" Foreground="White" FontSize="12" FontWeight="SemiBold"/>
+              <TextBlock x:Name="CompactStat4SubValue" Text="" Foreground="LightGreen" FontSize="9" FontWeight="SemiBold" VerticalAlignment="Bottom"/>
+            </StackPanel>
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ==================== FULL OVERLAY (Original Size) ==================== -->
+    <Border x:Name="FullLayout"
+                Background="#C8000000"
                 CornerRadius="8"
                 BorderBrush="#00FFFFFF"
                 Margin="4"
-                Padding="24">
-            <Grid x:Name="RootLayoutGrid" RowSpacing="16">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/> <!-- Header -->
-                    <RowDefinition Height="Auto"/> <!-- Points counter -->
-                    <RowDefinition Height="*"/>    <!-- Statistics grid -->
-                </Grid.RowDefinitions>
+                Padding="24"
+                Visibility="Collapsed">
+      <Grid x:Name="RootLayoutGrid" RowSpacing="16">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <!-- Header -->
+          <RowDefinition Height="Auto"/>
+          <!-- Points counter -->
+          <RowDefinition Height="*"/>
+          <!-- Statistics grid -->
+        </Grid.RowDefinitions>
 
-                <!-- Header: Game name and status -->
-                <StackPanel Grid.Row="0" HorizontalAlignment="Center" Spacing="4" Padding="0,0,0,16">
-                    <TextBlock x:Name="GameNameText"
+        <!-- Header: Game name and status -->
+        <StackPanel Grid.Row="0" HorizontalAlignment="Center" Spacing="4" Padding="0,0,0,16">
+          <TextBlock x:Name="GameNameText"
                                Text="No game running"
                                Foreground="White"
                                FontSize="22"
                                FontWeight="SemiBold"
                                HorizontalAlignment="Center"/>
-                    <TextBlock x:Name="GameStatusText"
+          <TextBlock x:Name="GameStatusText"
                                Text="sleeping - start a game to wake"
                                Foreground="#80FFFFFF"
                                FontSize="12"
                                HorizontalAlignment="Center"/>
-                </StackPanel>
+        </StackPanel>
 
-                <!-- Animated rings -->
-                <Border 
+        <!-- Animated rings -->
+        <Border 
                         Grid.Row="1"
                         Background="#4400AA00"
                         Width="80"
@@ -53,15 +185,15 @@
                         CornerRadius="100"
                         Opacity="0.9" />
 
-                <Border Grid.Row="1"
+        <Border Grid.Row="1"
                         Background="#4400AA00"
                         Width="120"
                         Height="120"
                         CornerRadius="100"
                         Opacity="0.6" />
 
-                <!-- Points counter ring and content -->
-                <Border x:Name="AnimatedCounterBorder"
+        <!-- Points counter ring and content -->
+        <Border x:Name="AnimatedCounterBorder"
                         Grid.Row="1"
                         Background="#4400AA00"
                         Width="150"
@@ -69,66 +201,66 @@
                         CornerRadius="100"
                         Opacity="0.8"   
                         RenderTransformOrigin="0.5,0.5">
-                    <Border.RenderTransform>
-                        <ScaleTransform x:Name="AnimatedBorderScale" ScaleX="1" ScaleY="1"/>
-                    </Border.RenderTransform>
-                </Border>
-
-                <StackPanel Grid.Row="1" HorizontalAlignment="Center" Width="150" Spacing="4" Height="100">
-                    <TextBlock x:Name="PointsText" Text="--" Foreground="White" FontSize="48" FontWeight="Bold" HorizontalAlignment="Center" Padding="0,12,0,0" />
-                    <TextBlock Text="POINTS EARNED" Foreground="#80FFFFFF" FontSize="16" HorizontalAlignment="Center" />
-                </StackPanel>
-
-                <!-- Statistics grid (2 columns) -->
-                <Grid Height="300" Grid.Row="2" ColumnSpacing="12" RowSpacing="32" Padding="0,16,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <!-- Stat 1 -->
-                    <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2">
-                        <TextBlock x:Name="Stat1Label" Text="Total Points" Foreground="#80FFFFFF" FontSize="14" TextAlignment="End"/>
-                        <TextBlock x:Name="Stat1Value" Text="--" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
-                        <TextBlock x:Name="Stat1Helptext" Text="Since 2025 April" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
-                    </StackPanel>
-
-                    <!-- Stat 2 -->
-                    <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2">
-                        <TextBlock x:Name="Stat2Label" Text="Donations Made" Foreground="#80FFFFFF" FontSize="12" TextAlignment="End"/>
-                        <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right">
-                            <TextBlock x:Name="Stat2Value" Text="8" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
-                            <TextBlock x:Name="Stat2SubVvalue" Text="+2" Foreground="LightGreen" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Bottom"/>
-                        </StackPanel>
-                        <TextBlock x:Name="Stat2Helptext" Text="Via Canopy" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
-                    </StackPanel>
-
-                    <!-- Stat 3 -->
-                    <StackPanel Grid.Row="1" Grid.Column="0" Spacing="2">
-                        <TextBlock x:Name="Stat3Label" Text="To New Donation" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
-                        <TextBlock x:Name="Stat3Value" Text="88.80%" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
-                        <TextBlock x:Name="Stat3Helptext" Text="840 points to go" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
-                    </StackPanel>
-
-                    <!-- Stat 4 -->
-                    <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
-                        <TextBlock x:Name="Stat4Label" Text="Total Donations" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
-                        <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right">
-                            <TextBlock x:Name="Stat4Value" Text="8" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
-                            <TextBlock x:Name="Stat4SubVvalue" Text="+2" Foreground="LightGreen" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Bottom"/>
-                        </StackPanel>
-                        <TextBlock x:Name="Stat4Helptext" Text="Community Wide" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
-                    </StackPanel>
-                </Grid>
-            </Grid>
+          <Border.RenderTransform>
+            <ScaleTransform x:Name="AnimatedBorderScale" ScaleX="1" ScaleY="1"/>
+          </Border.RenderTransform>
         </Border>
 
-        <!-- Drag overlay shown when drag mode is enabled - must be on top -->
-        <Border x:Name="DragHandle"
+        <StackPanel Grid.Row="1" HorizontalAlignment="Center" Width="150" Spacing="4" Height="100">
+          <TextBlock x:Name="PointsText" Text="--" Foreground="White" FontSize="48" FontWeight="Bold" HorizontalAlignment="Center" Padding="0,12,0,0" />
+          <TextBlock Text="POINTS EARNED" Foreground="#80FFFFFF" FontSize="16" HorizontalAlignment="Center" />
+        </StackPanel>
+
+        <!-- Statistics grid (2 columns) -->
+        <Grid Height="300" Grid.Row="2" ColumnSpacing="12" RowSpacing="32" Padding="0,16,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <!-- Stat 1 -->
+          <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2">
+            <TextBlock x:Name="Stat1Label" Text="Total Points" Foreground="#80FFFFFF" FontSize="14" TextAlignment="End"/>
+            <TextBlock x:Name="Stat1Value" Text="--" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
+            <TextBlock x:Name="Stat1Helptext" Text="Since 2025 April" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
+          </StackPanel>
+
+          <!-- Stat 2 -->
+          <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2">
+            <TextBlock x:Name="Stat2Label" Text="Donations Made" Foreground="#80FFFFFF" FontSize="12" TextAlignment="End"/>
+            <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right">
+              <TextBlock x:Name="Stat2Value" Text="8" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
+              <TextBlock x:Name="Stat2SubVvalue" Text="+2" Foreground="LightGreen" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Bottom"/>
+            </StackPanel>
+            <TextBlock x:Name="Stat2Helptext" Text="Via Canopy" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
+          </StackPanel>
+
+          <!-- Stat 3 -->
+          <StackPanel Grid.Row="1" Grid.Column="0" Spacing="2">
+            <TextBlock x:Name="Stat3Label" Text="To New Donation" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
+            <TextBlock x:Name="Stat3Value" Text="88.80%" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
+            <TextBlock x:Name="Stat3Helptext" Text="840 points to go" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
+          </StackPanel>
+
+          <!-- Stat 4 -->
+          <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
+            <TextBlock x:Name="Stat4Label" Text="Total Donations" Foreground="#80FFFFFF" FontSize="11" TextAlignment="End"/>
+            <StackPanel Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right">
+              <TextBlock x:Name="Stat4Value" Text="8" Foreground="White" FontSize="24" FontWeight="SemiBold" TextAlignment="End"/>
+              <TextBlock x:Name="Stat4SubVvalue" Text="+2" Foreground="LightGreen" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Bottom"/>
+            </StackPanel>
+            <TextBlock x:Name="Stat4Helptext" Text="Community Wide" Foreground="#88FFFFFF" FontSize="11" FontWeight="SemiBold" TextAlignment="End"/>
+          </StackPanel>
+        </Grid>
+      </Grid>
+    </Border>
+
+    <!-- Drag overlay shown when drag mode is enabled - must be on top -->
+    <Border x:Name="DragHandle"
                 Background="#80EAB308"
                 Visibility="Collapsed"
                 PointerPressed="DragHandle_PointerPressed"
@@ -136,21 +268,15 @@
                 PointerReleased="DragHandle_PointerReleased"
                 PointerCaptureLost="DragHandle_PointerCaptureLost"
                 CornerRadius="8"
-                Margin="4">
-            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                <FontIcon Glyph="&#xE759;" FontSize="32" Foreground="#EAB308" Margin="0,0,0,8"/>
-                <TextBlock Text="Drag to Move"
+                Margin="2">
+      <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4">
+        <FontIcon Glyph="&#xE759;" FontSize="18" Foreground="#EAB308"/>
+        <TextBlock Text="Drag"
                            Foreground="#EAB308"
-                           FontSize="18"
+                           FontSize="10"
                            FontWeight="SemiBold"
                            HorizontalAlignment="Center"/>
-                <TextBlock Text="Press shortcut again to exit"
-                           Foreground="#EAB308"
-                           FontSize="12"
-                           HorizontalAlignment="Center"
-                           Opacity="0.8"
-                           Margin="0,4,0,0"/>
-            </StackPanel>
-        </Border>
-    </Grid>
-</Window>
+      </StackPanel>
+    </Border>
+  </Grid>
+</winex:WindowEx>

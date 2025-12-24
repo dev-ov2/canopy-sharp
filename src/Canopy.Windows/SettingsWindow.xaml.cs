@@ -1,13 +1,11 @@
+using System.Reflection;
+using System.Text;
 using Canopy.Core.Application;
 using Canopy.Windows.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
-using System.Reflection;
-using System.Text;
 using Windows.Graphics;
 using Windows.System;
 using Windows.UI.Core;
@@ -95,6 +93,7 @@ public sealed partial class SettingsWindow : Window
         StartOpenToggle.IsOn = settings.StartOpen;
         AutoUpdateToggle.IsOn = settings.AutoUpdate;
         EnableOverlayToggle.IsOn = settings.EnableOverlay;
+        CompactOverlayToggle.IsOn = settings.CompactOverlay;
         OverlayShortcutTextBox.Text = settings.OverlayToggleShortcut;
         DragShortcutTextBox.Text = settings.OverlayDragShortcut;
         UpdateOverlayControlsState();
@@ -103,6 +102,8 @@ public sealed partial class SettingsWindow : Window
     private void UpdateOverlayControlsState()
     {
         bool isEnabled = EnableOverlayToggle.IsOn;
+        CompactOverlayGrid.Opacity = isEnabled ? 1.0 : 0.5;
+        CompactOverlayToggle.IsEnabled = isEnabled;
         OverlayShortcutGrid.Opacity = isEnabled ? 1.0 : 0.5;
         DragShortcutGrid.Opacity = isEnabled ? 1.0 : 0.5;
         OverlayShortcutTextBox.IsEnabled = isEnabled;
@@ -112,7 +113,8 @@ public sealed partial class SettingsWindow : Window
 
     private void StartWithWindowsToggle_Toggled(object sender, RoutedEventArgs e)
     {
-        if (!_settingsLoaded) return;
+        if (!_settingsLoaded)
+            return;
         bool isEnabled = StartWithWindowsToggle.IsOn;
         _platformServices.SetStartupRegistration(isEnabled, StartOpenToggle.IsOn);
         _settingsService.Update(s => s.StartWithWindows = isEnabled);
@@ -123,13 +125,15 @@ public sealed partial class SettingsWindow : Window
 
     private void StartOpenToggle_Toggled(object sender, RoutedEventArgs e)
     {
-        if (!_settingsLoaded) return;
+        if (!_settingsLoaded)
+            return;
         _settingsService.Update(s => s.StartOpen = StartOpenToggle.IsOn);
     }
 
     private void AutoUpdateToggle_Toggled(object sender, RoutedEventArgs e)
     {
-        if (!_settingsLoaded) return;
+        if (!_settingsLoaded)
+            return;
         _settingsService.Update(s => s.AutoUpdate = AutoUpdateToggle.IsOn);
     }
 
@@ -143,7 +147,7 @@ public sealed partial class SettingsWindow : Window
         try
         {
             _availableUpdate = await _updateService.CheckForUpdatesAsync();
-            
+
             if (_availableUpdate != null)
             {
                 UpdateStatusText.Text = $"v{_availableUpdate.Version} available!";
@@ -168,7 +172,8 @@ public sealed partial class SettingsWindow : Window
 
     private async void UpdateNowButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_availableUpdate == null) return;
+        if (_availableUpdate == null)
+            return;
 
         // Disable buttons and show progress
         CheckUpdatesButton.IsEnabled = false;
@@ -194,21 +199,32 @@ public sealed partial class SettingsWindow : Window
 
     private void EnableOverlayToggle_Toggled(object sender, RoutedEventArgs e)
     {
-        if (!_settingsLoaded) return;
+        if (!_settingsLoaded)
+            return;
         _settingsService.Update(s => s.EnableOverlay = EnableOverlayToggle.IsOn);
         UpdateOverlayControlsState();
 
         if (!EnableOverlayToggle.IsOn)
         {
-            try { App.Services.GetRequiredService<OverlayWindow>().HideOverlay(); } catch { }
+            try
+            { App.Services.GetRequiredService<OverlayWindow>().HideOverlay(); }
+            catch { }
         }
+    }
+
+    private void CompactOverlayToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!_settingsLoaded)
+            return;
+        _settingsService.Update(s => s.CompactOverlay = CompactOverlayToggle.IsOn);
     }
 
     private void ShortcutTextBox_GotFocus(object sender, RoutedEventArgs e)
     {
         _isCapturingShortcut = true;
         _activeShortcutBox = sender as TextBox;
-        if (_activeShortcutBox != null) _activeShortcutBox.Text = "Press keys...";
+        if (_activeShortcutBox != null)
+            _activeShortcutBox.Text = "Press keys...";
     }
 
     private void ShortcutTextBox_LostFocus(object sender, RoutedEventArgs e)
@@ -218,8 +234,8 @@ public sealed partial class SettingsWindow : Window
         if (textBox?.Text == "Press keys...")
         {
             var settings = _settingsService.Settings;
-            textBox.Text = textBox == OverlayShortcutTextBox 
-                ? settings.OverlayToggleShortcut 
+            textBox.Text = textBox == OverlayShortcutTextBox
+                ? settings.OverlayToggleShortcut
                 : settings.OverlayDragShortcut;
         }
         _activeShortcutBox = null;
@@ -240,7 +256,8 @@ public sealed partial class SettingsWindow : Window
     private bool CaptureShortcut(KeyRoutedEventArgs e, out string shortcut)
     {
         shortcut = "";
-        if (!_isCapturingShortcut || _activeShortcutBox == null) return false;
+        if (!_isCapturingShortcut || _activeShortcutBox == null)
+            return false;
 
         e.Handled = true;
         var sb = new StringBuilder();
@@ -263,7 +280,7 @@ public sealed partial class SettingsWindow : Window
         return false;
     }
 
-    private static bool IsModifierKey(VirtualKey key) => key is 
+    private static bool IsModifierKey(VirtualKey key) => key is
         VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl or
         VirtualKey.Menu or VirtualKey.LeftMenu or VirtualKey.RightMenu or
         VirtualKey.Shift or VirtualKey.LeftShift or VirtualKey.RightShift or
@@ -272,7 +289,9 @@ public sealed partial class SettingsWindow : Window
     private void ResetOverlayPositionButton_Click(object sender, RoutedEventArgs e)
     {
         _settingsService.Update(s => { s.OverlayX = null; s.OverlayY = null; });
-        try { App.Services.GetRequiredService<OverlayWindow>().PositionAtScreenEdge(); } catch { }
+        try
+        { App.Services.GetRequiredService<OverlayWindow>().PositionAtScreenEdge(); }
+        catch { }
     }
 
     private void CloseButton_Click(object sender, RoutedEventArgs e) => Close();

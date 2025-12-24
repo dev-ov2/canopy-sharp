@@ -1,34 +1,29 @@
+using System.Diagnostics;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using Canopy.Core.Application;
-using Canopy.Core.GameDetection;
 using Canopy.Core.IPC;
 using Canopy.Windows.Interop;
 using Canopy.Windows.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
-using System;
-using System.Diagnostics;
-using System.Drawing;
-using System.Net.Http;
-using System.Runtime.InteropServices;
-using System.Text.Json;
-using System.Threading.Tasks;
-using Windows.Foundation;
 using Windows.Graphics;
 using WinRT.Interop;
+using WinUIEx;
 
 namespace Canopy.Windows;
 
 /// <summary>
-/// Overlay window that sits on top of games
+/// Overlay window that sits on top of games.
+/// Uses WinUIEx for proper transparency support.
 /// Positioned at x = screen.Width - overlayWidth, y = 0
 /// </summary>
-public sealed partial class OverlayWindow : Window
+public sealed partial class OverlayWindow : WindowEx
 {
     private readonly WebViewIpcBridge _ipcBridge;
     private readonly ISettingsService _settingsService;
@@ -36,10 +31,10 @@ public sealed partial class OverlayWindow : Window
     private IntPtr _hwnd;
     private bool _isDragEnabled;
     private bool _isDragging;
-    public Boolean IsBorderVisible = false;
+    private bool _isCompactMode;
+    public bool IsBorderVisible = false;
 
     public BitmapImage? BorderSource = null;
-
 
     // Drag state - use screen coordinates for smooth dragging
     private POINT _dragStartCursor;
@@ -52,6 +47,17 @@ public sealed partial class OverlayWindow : Window
     private const int DefaultWidth = 280;
     private const int DefaultHeight = 520;
 
+    // Compact overlay dimensions (narrow vertical toolbar)
+    private const int CompactWidth = 120;
+    private const int CompactHeight = 300;
+
+    // Win32 constants
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_LAYERED = 0x80000;
+    private const int WS_EX_TRANSPARENT = 0x20;
+    private const int WS_EX_NOACTIVATE = 0x08000000;
+    private const int LWA_ALPHA = 0x2;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT
     {
@@ -59,9 +65,19 @@ public sealed partial class OverlayWindow : Window
         public int Y;
     }
 
-    [LibraryImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLongW(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int SetWindowLongW(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool GetCursorPos(out POINT lpPoint);
+    private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
 
     public bool IsDragEnabled
     {
@@ -85,20 +101,73 @@ public sealed partial class OverlayWindow : Window
         _ipcBridge.Subscribe(IpcMessageTypes.DataReceived, this.OnDataReceived);
         Debug.WriteLine("overlay ready");
 
+        // Determine initial mode from settings
+        _isCompactMode = _settingsService.Settings.CompactOverlay;
 
         SetupOverlayWindow();
+        ApplyLayoutMode();
         RestorePosition();
 
         // Default to indeterminate state at startup
         SetIndeterminate();
 
-        SetupEventHandlers();
+        // Subscribe to settings changes
+        _settingsService.SettingsChanged += OnSettingsChanged;
 
         _ = _ipcBridge.Send(new IpcMessage
         {
             Type = IpcMessageTypes.OverlayShow,
         });
     }
+
+    private void OnSettingsChanged(object? sender, AppSettings settings)
+    {
+        if (settings.CompactOverlay != _isCompactMode)
+        {
+            _isCompactMode = settings.CompactOverlay;
+            ApplyLayoutMode();
+        }
+    }
+
+    /// <summary>
+    /// Applies the current layout mode (compact or full)
+    /// </summary>
+    private void ApplyLayoutMode()
+    {
+        if (_appWindow == null)
+            return;
+
+        if (_isCompactMode)
+        {
+            CompactLayout.Visibility = Visibility.Visible;
+            FullLayout.Visibility = Visibility.Collapsed;
+            _appWindow.Resize(new SizeInt32(CompactWidth, CompactHeight));
+
+            OverlayBorder.Width = CompactWidth;
+            OverlayBorder.Height = CompactHeight;
+        }
+        else
+        {
+            CompactLayout.Visibility = Visibility.Collapsed;
+            FullLayout.Visibility = Visibility.Visible;
+            _appWindow.Resize(new SizeInt32(DefaultWidth, DefaultHeight));
+
+            OverlayBorder.Width = DefaultWidth;
+            OverlayBorder.Height = DefaultHeight;
+        }
+
+        PositionAtScreenEdge();
+    }
+
+    /// <summary>
+    /// Gets the current overlay width based on mode
+    /// </summary>
+    private int CurrentWidth => _isCompactMode ? CompactWidth : DefaultWidth;
+
+    /// <summary>
+    /// Gets the current overlay height based on mode
+    /// </summary>
+    private int CurrentHeight => _isCompactMode ? CompactHeight : DefaultHeight;
 
     public async Task<Bitmap> LoadImageFromUrlAsync(string imageUrl)
     {
@@ -115,8 +184,10 @@ public sealed partial class OverlayWindow : Window
 
         if (_appWindow != null)
         {
-            // Set window size
-            _appWindow.Resize(new SizeInt32(DefaultWidth, DefaultHeight));
+            // Set initial window size based on mode
+            var initialWidth = _isCompactMode ? CompactWidth : DefaultWidth;
+            var initialHeight = _isCompactMode ? CompactHeight : DefaultHeight;
+            _appWindow.Resize(new SizeInt32(initialWidth, initialHeight));
 
             // Use OverlappedPresenter to configure topmost
             var presenter = OverlappedPresenter.Create();
@@ -131,20 +202,37 @@ public sealed partial class OverlayWindow : Window
             // Track position changes for persistence
             _appWindow.Changed += AppWindow_Changed;
         }
+
+        // Use WinUIEx for transparency - this is the key!
+        this.IsAlwaysOnTop = true;
+        this.IsResizable = false;
+        this.IsMaximizable = false;
+        this.IsMinimizable = false;
+
+        // Make window click-through by default
+        MakeClickThrough();
+    }
+
+    /// <summary>
+    /// Makes the window click-through
+    /// </summary>
+    private void MakeClickThrough()
+    {
+        if (_hwnd == IntPtr.Zero)
+            return;
+
+        var exStyle = GetWindowLongW(_hwnd, GWL_EXSTYLE);
+        exStyle |= WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE;
+        SetWindowLongW(_hwnd, GWL_EXSTYLE, exStyle);
+        SetLayeredWindowAttributes(_hwnd, 0, 255, LWA_ALPHA);
     }
 
     private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)
     {
-        // Save position when window is moved (after drag ends)
         if (args.DidPositionChange && !_isDragging && _isDragEnabled)
         {
             SavePosition();
         }
-    }
-
-    private void SetupEventHandlers()
-    {
-        // Event handlers are wired up in XAML
     }
 
     /// <summary>
@@ -152,7 +240,8 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     private void RestorePosition()
     {
-        if (_appWindow == null) return;
+        if (_appWindow == null)
+            return;
 
         var settings = _settingsService.Settings;
         if (settings.OverlayX.HasValue && settings.OverlayY.HasValue)
@@ -170,7 +259,8 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     private void SavePosition()
     {
-        if (_appWindow == null) return;
+        if (_appWindow == null)
+            return;
 
         var position = _appWindow.Position;
         _settingsService.Update(s =>
@@ -186,9 +276,11 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     public void PositionAtScreenEdge()
     {
-        if (_appWindow == null) return;
+        if (_appWindow == null)
+            return;
+
         var (screenWidth, _) = NativeMethods.GetPrimaryScreenSize();
-        var x = screenWidth - DefaultWidth;
+        var x = screenWidth - CurrentWidth;
         var y = 0;
 
         _appWindow.Move(new PointInt32(x, y));
@@ -207,13 +299,15 @@ public sealed partial class OverlayWindow : Window
         int subValue;
         string subValueText;
         string helpText = element.GetProperty("helptext").GetString() ?? "";
-        
+
         switch (label)
         {
             case 1:
                 Stat1Label.Text = labelText;
                 Stat1Value.Text = valueText;
                 Stat1Helptext.Text = helpText;
+                CompactStat1Label.Text = labelText;
+                CompactStat1Value.Text = valueText;
                 break;
             case 2:
                 subValue = element.GetProperty("subvalue").GetInt32();
@@ -222,11 +316,16 @@ public sealed partial class OverlayWindow : Window
                 Stat2Value.Text = valueText;
                 Stat2SubVvalue.Text = subValueText;
                 Stat2Helptext.Text = helpText;
+                CompactStat2Label.Text = labelText;
+                CompactStat2Value.Text = valueText;
+                CompactStat2SubValue.Text = subValueText;
                 break;
             case 3:
                 Stat3Label.Text = labelText;
                 Stat3Value.Text = valueText;
                 Stat3Helptext.Text = helpText;
+                CompactStat3Label.Text = labelText;
+                CompactStat3Value.Text = valueText;
                 break;
             case 4:
                 subValue = element.GetProperty("subvalue").GetInt32();
@@ -235,24 +334,45 @@ public sealed partial class OverlayWindow : Window
                 Stat4Value.Text = valueText;
                 Stat4SubVvalue.Text = subValueText;
                 Stat4Helptext.Text = helpText;
+                CompactStat4Label.Text = labelText;
+                CompactStat4Value.Text = valueText;
+                CompactStat4SubValue.Text = subValueText;
                 break;
 
-            default: break;
+            default:
+                break;
         }
+    }
+
+    /// <summary>
+    /// Gets a shortened version of a label for compact mode
+    /// </summary>
+    private static string GetShortLabel(string label)
+    {
+        // Shorten common labels for compact mode
+        return label.ToLowerInvariant() switch
+        {
+            "total points" => "Total",
+            "donations made" => "Donations",
+            "to new donation" => "Next",
+            "total donations" => "Community",
+            _ => label.Length > 10 ? label[..10] : label
+        };
     }
 
     private void OnDataReceived(IpcMessage message)
     {
-        if (message.Payload == null) return;
+        if (message.Payload == null)
+            return;
 
         try
         {
             Debug.WriteLine($"OnDataReceived: {message.Payload}");
             var payload = (JsonElement)message.Payload;
-            
+
             if (!payload.TryGetProperty("type", out var typeElement))
                 return;
-                
+
             var type = typeElement.GetString();
 
             switch (type)
@@ -273,21 +393,20 @@ public sealed partial class OverlayWindow : Window
                     {
                         var counter = counterData.GetInt32();
                         PointsText.Text = counter.ToString();
+                        CompactPointsText.Text = counter.ToString();
                     }
                     break;
 
                 case "BORDER_IMAGE_UPDATE":
                     if (payload.TryGetProperty("data", out var borderData))
                     {
-                        // Handle both null JSON value and string value
-                        var borderSource = borderData.ValueKind == JsonValueKind.Null 
-                            ? null 
+                        var borderSource = borderData.ValueKind == JsonValueKind.Null
+                            ? null
                             : borderData.GetString();
                         UpdateBorderImage(borderSource);
                     }
                     else
                     {
-                        // No data property means clear the border
                         UpdateBorderImage(null);
                     }
                     break;
@@ -306,7 +425,6 @@ public sealed partial class OverlayWindow : Window
     {
         if (string.IsNullOrEmpty(borderSource))
         {
-            // Hide border
             OverlayBorder.Source = null;
             OverlayBorder.Visibility = Visibility.Collapsed;
             BorderSource = null;
@@ -346,8 +464,6 @@ public sealed partial class OverlayWindow : Window
     /// <summary>
     /// Updates the game info displayed in the overlay header
     /// </summary>
-    /// <param name="gameName">Name of the running game, or null if no game</param>
-    /// <param name="elapsedTime">Formatted elapsed time string (e.g., "01:23:45")</param>
     public void UpdateGameInfo(string? gameName, string? elapsedTime = null)
     {
         if (gameName != null)
@@ -357,6 +473,13 @@ public sealed partial class OverlayWindow : Window
                 ? $"Playing now · Time elapsed: {elapsedTime}"
                 : "Playing now";
             PointsText.Text = "0";
+
+            CompactGameNameText.Text = gameName;
+            CompactGameStatusText.Text = elapsedTime != null
+                ? $"Time: {elapsedTime}"
+                : "In game";
+            CompactPointsText.Text = "0";
+
             SetActive();
         }
         else
@@ -364,6 +487,11 @@ public sealed partial class OverlayWindow : Window
             GameNameText.Text = "No game running";
             GameStatusText.Text = "sleeping - start a game to wake";
             PointsText.Text = "--";
+
+            CompactGameNameText.Text = "No game running";
+            CompactGameStatusText.Text = "sleeping";
+            CompactPointsText.Text = "--";
+
             SetIndeterminate();
         }
     }
@@ -373,33 +501,9 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     public void UpdatePoints(int? points)
     {
-        PointsText.Text = points?.ToString("N0") ?? "--";
-    }
-
-    /// <summary>
-    /// Updates a statistic by index (1-4)
-    /// </summary>
-    public void UpdateStat(int index, string label, string value)
-    {
-        switch (index)
-        {
-            case 1:
-                Stat1Label.Text = label;
-                Stat1Value.Text = value;
-                break;
-            case 2:
-                Stat2Label.Text = label;
-                Stat2Value.Text = value;
-                break;
-            case 3:
-                Stat3Label.Text = label;
-                Stat3Value.Text = value;
-                break;
-            case 4:
-                Stat4Label.Text = label;
-                Stat4Value.Text = value;
-                break;
-        }
+        var text = points?.ToString("N0") ?? "--";
+        PointsText.Text = text;
+        CompactPointsText.Text = text;
     }
 
     /// <summary>
@@ -407,19 +511,16 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     private void UpdateClickThrough()
     {
-        if (_hwnd == IntPtr.Zero) return;
+        if (_hwnd == IntPtr.Zero)
+            return;
 
         if (_isDragEnabled)
         {
-            // Remove click-through when dragging is enabled
             NativeMethods.RemoveClickThrough(_hwnd);
         }
         else
         {
-            // Make click-through when not dragging
             NativeMethods.MakeClickThrough(_hwnd);
-            
-            // Save position when exiting drag mode
             SavePosition();
         }
     }
@@ -432,11 +533,11 @@ public sealed partial class OverlayWindow : Window
         if (_isDragEnabled && _appWindow != null)
         {
             _isDragging = true;
-            
+
             // Get cursor position in screen coordinates
             GetCursorPos(out _dragStartCursor);
             _windowStartPosition = _appWindow.Position;
-            
+
             // Capture pointer for smooth dragging
             DragHandle.CapturePointer(e.Pointer);
             e.Handled = true;
@@ -452,7 +553,7 @@ public sealed partial class OverlayWindow : Window
         {
             // Get current cursor position in screen coordinates
             GetCursorPos(out var currentCursor);
-            
+
             var deltaX = currentCursor.X - _dragStartCursor.X;
             var deltaY = currentCursor.Y - _dragStartCursor.Y;
 
@@ -479,7 +580,7 @@ public sealed partial class OverlayWindow : Window
     }
 
     /// <summary>
-    /// Handles pointer capture lost (e.g., window loses focus during drag)
+    /// Handles pointer capture lost
     /// </summary>
     private void DragHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
     {
@@ -495,9 +596,9 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     public void Toggle()
     {
-        if (_appWindow == null) return;
+        if (_appWindow == null)
+            return;
 
-        // Check if overlay is enabled in settings
         if (!_settingsService.Settings.EnableOverlay)
             return;
 
@@ -516,9 +617,9 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     public void Show()
     {
-        if (_appWindow == null) return;
+        if (_appWindow == null)
+            return;
 
-        // Check if overlay is enabled in settings
         if (!_settingsService.Settings.EnableOverlay)
             return;
 
@@ -531,7 +632,6 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     public void HideOverlay()
     {
-        // Disable drag mode when hiding
         if (_isDragEnabled)
         {
             IsDragEnabled = false;
@@ -553,18 +653,20 @@ public sealed partial class OverlayWindow : Window
         {
             StopCurrentAnimation();
 
-            // Ensure the animation targets exist
-            if (AnimatedBorderScale == null || AnimatedCounterBorder == null)
-            {
-                Debug.WriteLine("Animation targets not ready yet");
-                return;
-            }
-
             var storyboard = new Storyboard
             {
                 RepeatBehavior = RepeatBehavior.Forever,
                 AutoReverse = true
             };
+
+            var targetBorder = _isCompactMode ? CompactAnimatedBorder : AnimatedCounterBorder;
+            var targetScale = _isCompactMode ? CompactAnimatedScale : AnimatedBorderScale;
+
+            if (targetScale == null || targetBorder == null)
+            {
+                Debug.WriteLine("Animation targets not ready yet");
+                return;
+            }
 
             var scaleXAnim = new DoubleAnimation
             {
@@ -572,7 +674,7 @@ public sealed partial class OverlayWindow : Window
                 To = 1.06,
                 Duration = new Duration(TimeSpan.FromSeconds(2.5))
             };
-            Storyboard.SetTarget(scaleXAnim, AnimatedBorderScale);
+            Storyboard.SetTarget(scaleXAnim, targetScale);
             Storyboard.SetTargetProperty(scaleXAnim, "ScaleX");
             storyboard.Children.Add(scaleXAnim);
 
@@ -582,7 +684,7 @@ public sealed partial class OverlayWindow : Window
                 To = 1.06,
                 Duration = new Duration(TimeSpan.FromSeconds(2.5))
             };
-            Storyboard.SetTarget(scaleYAnim, AnimatedBorderScale);
+            Storyboard.SetTarget(scaleYAnim, targetScale);
             Storyboard.SetTargetProperty(scaleYAnim, "ScaleY");
             storyboard.Children.Add(scaleYAnim);
 
@@ -592,7 +694,7 @@ public sealed partial class OverlayWindow : Window
                 To = 1.0,
                 Duration = new Duration(TimeSpan.FromSeconds(2.5))
             };
-            Storyboard.SetTarget(opacityAnim, AnimatedCounterBorder);
+            Storyboard.SetTarget(opacityAnim, targetBorder);
             Storyboard.SetTargetProperty(opacityAnim, "Opacity");
             storyboard.Children.Add(opacityAnim);
 
@@ -615,17 +717,19 @@ public sealed partial class OverlayWindow : Window
         {
             StopCurrentAnimation();
 
-            // Ensure the animation targets exist
-            if (AnimatedBorderScale == null || AnimatedCounterBorder == null)
-            {
-                Debug.WriteLine("Animation targets not ready yet");
-                return;
-            }
-
             var storyboard = new Storyboard
             {
                 RepeatBehavior = RepeatBehavior.Forever
             };
+
+            var targetBorder = _isCompactMode ? CompactAnimatedBorder : AnimatedCounterBorder;
+            var targetScale = _isCompactMode ? CompactAnimatedScale : AnimatedBorderScale;
+
+            if (targetScale == null || targetBorder == null)
+            {
+                Debug.WriteLine("Animation targets not ready yet");
+                return;
+            }
 
             // Total duration 3s, scale/opacity reach target at 70% (2.1s)
             var duration = TimeSpan.FromSeconds(3);
@@ -649,7 +753,7 @@ public sealed partial class OverlayWindow : Window
                 KeyTime = KeyTime.FromTimeSpan(duration),
                 Value = 1.5
             });
-            Storyboard.SetTarget(scaleXAnim, AnimatedBorderScale);
+            Storyboard.SetTarget(scaleXAnim, targetScale);
             Storyboard.SetTargetProperty(scaleXAnim, "ScaleX");
             storyboard.Children.Add(scaleXAnim);
 
@@ -671,7 +775,7 @@ public sealed partial class OverlayWindow : Window
                 KeyTime = KeyTime.FromTimeSpan(duration),
                 Value = 1.5
             });
-            Storyboard.SetTarget(scaleYAnim, AnimatedBorderScale);
+            Storyboard.SetTarget(scaleYAnim, targetScale);
             Storyboard.SetTargetProperty(scaleYAnim, "ScaleY");
             storyboard.Children.Add(scaleYAnim);
 
@@ -693,7 +797,7 @@ public sealed partial class OverlayWindow : Window
                 KeyTime = KeyTime.FromTimeSpan(duration),
                 Value = 0
             });
-            Storyboard.SetTarget(opacityAnim, AnimatedCounterBorder);
+            Storyboard.SetTarget(opacityAnim, targetBorder);
             Storyboard.SetTargetProperty(opacityAnim, "Opacity");
             storyboard.Children.Add(opacityAnim);
 

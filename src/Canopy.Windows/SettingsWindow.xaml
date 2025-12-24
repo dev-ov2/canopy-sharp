@@ -48,8 +48,8 @@
 
           <Grid>
             <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
+                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/> 
                         </Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock Text="Auto-update"/>
@@ -97,6 +97,18 @@
                             <TextBlock Text="Show the floating overlay window" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
                         </StackPanel>
                         <ToggleSwitch x:Name="EnableOverlayToggle" Grid.Column="1" Toggled="EnableOverlayToggle_Toggled"/>
+                    </Grid>
+
+                    <Grid x:Name="CompactOverlayGrid">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="Compact mode"/>
+                            <TextBlock Text="Use smaller toolbar-style overlay" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12"/>
+                        </StackPanel>
+                        <ToggleSwitch x:Name="CompactOverlayToggle" Grid.Column="1" Toggled="CompactOverlayToggle_Toggled"/>
                     </Grid>
 
                     <Grid x:Name="OverlayShortcutGrid">

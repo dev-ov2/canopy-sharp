@@ -15,6 +15,12 @@ public class AppSettings
     public string OverlayToggleShortcut { get; set; } = "Ctrl+Alt+O";
     public string OverlayDragShortcut { get; set; } = "Ctrl+Alt+D";
 
+    /// <summary>
+    /// When true, uses the compact toolbar-style overlay (narrower, 2/3 height).
+    /// When false, uses the full-size overlay.
+    /// </summary>
+    public bool CompactOverlay { get; set; } = true;
+
     // Overlay position (persisted when dragged)
     public int? OverlayX { get; set; }
     public int? OverlayY { get; set; }
